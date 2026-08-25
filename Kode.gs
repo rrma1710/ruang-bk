@@ -178,6 +178,86 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+// ============================================================
+//  API GATEWAY (untuk frontend yang di-hosting TERPISAH, mis. di
+//  Cloudflare Pages, dan memanggil Apps Script ini lewat fetch()).
+//
+//  Frontend mengirim POST dengan Content-Type: text/plain (supaya
+//  browser tidak mengirim preflight OPTIONS yang tidak bisa dijawab
+//  Apps Script) berisi body JSON: { "fn": "namaFungsi", "args": [...] }.
+//
+//  HANYA fungsi yang terdaftar di API_WHITELIST di bawah ini yang
+//  boleh dipanggil dari luar — supaya fungsi internal (diawali "_")
+//  atau fungsi sensitif lain tidak bisa dieksekusi sembarangan dari
+//  luar walau nama fungsinya ditebak.
+// ============================================================
+const API_WHITELIST = {
+  checkLogin: checkLogin,
+  checkSessionValid: checkSessionValid,
+  logoutSesi: logoutSesi,
+  getAdminEditStatus: getAdminEditStatus,
+  setAdminEditStatus: setAdminEditStatus,
+  getWaNotifStatus: getWaNotifStatus,
+  setWaNotifStatus: setWaNotifStatus,
+  getAuditLog: getAuditLog,
+  getDaftarAkun: getDaftarAkun,
+  simpanAkun: simpanAkun,
+  setStatusAkun: setStatusAkun,
+  hapusAkun: hapusAkun,
+  getSuperadminPinStatus: getSuperadminPinStatus,
+  setSuperadminPin: setSuperadminPin,
+  getDaftarSiswa: getDaftarSiswa,
+  getDaftarAngkatan: getDaftarAngkatan,
+  simpanAngkatan: simpanAngkatan,
+  getDataSiswaAdmin: getDataSiswaAdmin,
+  simpanDataSiswa: simpanDataSiswa,
+  simpanBanyakSiswa: simpanBanyakSiswa,
+  hapusDataSiswa: hapusDataSiswa,
+  hapusDataSiswaMassal: hapusDataSiswaMassal,
+  setAngkatanMassal: setAngkatanMassal,
+  setStatusSiswa: setStatusSiswa,
+  setStatusMassal: setStatusMassal,
+  getDataWaliKelasAdmin: getDataWaliKelasAdmin,
+  simpanWaliKelas: simpanWaliKelas,
+  hapusWaliKelas: hapusWaliKelas,
+  simpanData: simpanData,
+  getDashboardStats: getDashboardStats,
+  getRekapData: getRekapData,
+  editSharedKelompok: editSharedKelompok,
+  editData: editData,
+  hapusData: hapusData,
+  hapusDataMassal: hapusDataMassal,
+  editDataMassal: editDataMassal
+};
+
+function doPost(e) {
+  function respond(payload) {
+    // text/plain di sisi CLIENT (request) yang penting untuk hindari
+    // preflight; response boleh tetap JSON biasa.
+    return ContentService.createTextOutput(JSON.stringify(payload))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return respond({ __error: 'Permintaan kosong atau tidak valid.' });
+    }
+
+    const body = JSON.parse(e.postData.contents);
+    const fnName = body && body.fn;
+    const args = (body && Array.isArray(body.args)) ? body.args : [];
+
+    if (!fnName || !Object.prototype.hasOwnProperty.call(API_WHITELIST, fnName)) {
+      return respond({ __error: 'Fungsi "' + fnName + '" tidak dikenal atau tidak diizinkan diakses dari luar.' });
+    }
+
+    const result = API_WHITELIST[fnName].apply(null, args);
+    return respond(result === undefined ? null : result);
+  } catch (err) {
+    return respond({ __error: (err && err.message) ? err.message : String(err) });
+  }
+}
+
 function _getOrCreateTargetFolder() {
   if (typeof FOLDER_ID !== 'undefined' && FOLDER_ID && FOLDER_ID.trim() !== '' && FOLDER_ID !== 'FOLDER_ID_DRIVE_ANDA') {
     try {
