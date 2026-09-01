@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title> Ruang BK Digital</title>
+  <title>Aplikasi BK Pro Multi-Tahun & Lightbox</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -993,88 +993,75 @@
 
   <!-- ===================== JAVASCRIPT APP ===================== -->
   <script>
-    // ============================================================
-    //  BRIDGE: google.script.run  →  fetch() ke Apps Script Web App
-    //
-    //  File ini sekarang di-hosting TERPISAH (mis. Cloudflare Pages),
-    //  bukan lagi diserve langsung oleh Apps Script — jadi API bawaan
-    //  `google.script.run` (yang hanya ada saat HTML diserve oleh Google)
-    //  tidak tersedia di sini. Blok ini MENIRU pola pemanggilan yang
-    //  sama persis (withSuccessHandler/withFailureHandler/namaFungsi)
-    //  supaya SEMUA kode di bawah tidak perlu diubah sama sekali —
-    //  di baliknya diganti jadi fetch() ke Web App Apps Script.
-    //
-    //  WAJIB: isi APPS_SCRIPT_URL di bawah dengan URL Web App hasil
-    //  Deploy > New deployment > Web app di Apps Script kamu (yang
-    //  berakhiran "/exec").
-    // ============================================================
-    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw65lA-hldsRgKQLIGRAPaBsOKs3mj2EJzvlXzZlicX9No-p_Bp-Rj-NE6-Hhk_ekYd/exec';
-
-    function _callAppsScript(fnName, args, onSuccess, onFailure) {
-      if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('GANTI_DENGAN_URL') !== -1) {
-        const err = new Error('APPS_SCRIPT_URL belum diisi. Buka bagian atas <script> di index.html dan isi dengan URL Web App Apps Script kamu.');
-        console.error(err.message);
-        if (onFailure) onFailure(err);
-        return;
-      }
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST',
-        // Content-Type text/plain SENGAJA dipakai (bukan application/json)
-        // supaya browser menganggap ini "simple request" dan TIDAK mengirim
-        // preflight OPTIONS — karena Apps Script Web App tidak bisa
-        // menjawab preflight tersebut.
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ fn: fnName, args: args })
-      })
-        .then(function(res) {
-          if (!res.ok) throw new Error('HTTP ' + res.status + ' dari server.');
-          return res.json();
-        })
-        .then(function(data) {
-          if (data && typeof data === 'object' && data.__error) {
-            throw new Error(data.__error);
-          }
-          if (onSuccess) onSuccess(data);
-        })
-        .catch(function(err) {
-          console.error('Gagal memanggil "' + fnName + '":', err);
-          if (onFailure) onFailure(err);
-        });
-    }
-
+    // Mock Safe Preview untuk Canvas (Mencegah error saat preview tanpa Apps Script)
     if (typeof google === 'undefined' || !google.script || !google.script.run) {
-      function _makeRunner(successCb, failureCb) {
-        // Proxy dipakai supaya SEMUA nama fungsi server (checkLogin,
-        // simpanData, hapusAkun, dst — 35+ fungsi) otomatis didukung
-        // tanpa perlu didaftarkan satu-satu di sini.
-        return new Proxy({
-          withFailureHandler: function(f) { return _makeRunner(successCb, f); }
-        }, {
-          get: function(target, prop) {
-            if (prop in target) return target[prop];
-            return function() {
-              const args = Array.prototype.slice.call(arguments);
-              _callAppsScript(prop, args, successCb, failureCb);
-            };
-          }
-        });
-      }
-
       window.google = {
         script: {
-          run: new Proxy({
-            withSuccessHandler: function(cb) { return _makeRunner(cb, null); }
-          }, {
-            get: function(target, prop) {
-              if (prop in target) return target[prop];
-              // Pemanggilan langsung tanpa withSuccessHandler, contoh:
-              // google.script.run.logoutSesi(token)
-              return function() {
-                const args = Array.prototype.slice.call(arguments);
-                _callAppsScript(prop, args, null, null);
+          run: {
+            withSuccessHandler: function(cb) {
+              const runner = {
+                withFailureHandler: function(f) { runner._fail = f; return runner; },
+                checkLogin: function(u, p) {
+                  setTimeout(function() {
+                    const isValid = (u.trim().toLowerCase() === 'q' && p.trim() === 'q');
+                    cb({ success: isValid, message: isValid ? 'Login Berhasil!' : 'Username/Password salah! Gunakan: q / q' });
+                  }, 300);
+                },
+                getDaftarSiswa: function() { setTimeout(function(){ cb([
+                  { nama: 'AMANDA NURY MAULIDA', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { nama: 'APRILIA NAYSA ADELIA', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { nama: 'MOHAMMAD ALIF', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { nama: 'ANDIKA STIYAWAN', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { nama: 'DEWI SINTA', kelas: '7A', angkatan: '2024/2025', status: 'AKTIF' },
+                  { nama: 'Davin Pratama', kelas: '8C', angkatan: '2025/2026', status: 'AKTIF' }
+                ]); }, 200); },
+                getDaftarAngkatan: function() { setTimeout(function(){ cb(['2024/2025', '2025/2026', '2026/2027']); }, 200); },
+                getRekapData: function() { setTimeout(function(){ cb([
+                  ["Timestamp", "Tgl Kejadian", "Nama Siswa", "Kelas", "Angkatan", "Kategori", "Kasus / Prestasi", "Tindakan", "URL Bukti"],
+                  [new Date().toISOString(), "2026-07-31", "AMANDA NURY MAULIDA", "7A", "2025/2026", "Pelanggaran", "sda", "adadadas", "https://i.postimg.cc/Xvmy17LS/logofix.png"],
+                  [new Date().toISOString(), "2026-07-31", "APRILIA NAYSA ADELIA", "7A", "2025/2026", "Pelanggaran", "sda", "adadadas", "https://i.postimg.cc/Xvmy17LS/logofix.png"],
+                  [new Date().toISOString(), "2026-07-31", "ANDIKA STIYAWAN", "7A", "2025/2026", "Kasus", "qwwqwq", "sxasa", "https://i.postimg.cc/Xvmy17LS/logofix.png"],
+                  [new Date().toISOString(), "2026-07-31", "DEWI SINTA", "7A", "2024/2025", "Kasus", "qwwqwq", "sxasa", "-"]
+                ]); }, 200); },
+                getDataSiswaAdmin: function() { setTimeout(function(){ cb([
+                  { rowIndex: 2, nama: 'AMANDA NURY MAULIDA', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { rowIndex: 3, nama: 'APRILIA NAYSA ADELIA', kelas: '7A', angkatan: '2025/2026', status: 'AKTIF' },
+                  { rowIndex: 4, nama: 'DEWI SINTA', kelas: '7A', angkatan: '2024/2025', status: 'AKTIF' }
+                ]); }, 200); },
+                simpanData: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Data laporan disimpan!' }); }, 300); },
+                simpanBanyakSiswa: function(arr) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: ' + arr.length + ' siswa ditambahkan!' }); }, 300); },
+                simpanAngkatan: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Angkatan custom disimpan!' }); }, 300); },
+                editData: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Data diedit!' }); }, 300); },
+                hapusData: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Data dihapus!' }); }, 300); },
+                hapusDataMassal: function(rows) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: ' + rows.length + ' laporan dihapus sekaligus!' }); }, 300); },
+                editDataMassal: function(rows) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: ' + rows.length + ' laporan diperbarui sekaligus!' }); }, 300); },
+                simpanDataSiswa: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Siswa disimpan!' }); }, 300); },
+                hapusDataSiswa: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Siswa dihapus!' }); }, 300); },
+                setAngkatanMassal: function(rows, angkatan) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Angkatan "' + angkatan + '" diterapkan ke ' + rows.length + ' siswa!' }); }, 300); },
+                setStatusSiswa: function(rowIndex, status) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Status diubah menjadi ' + status + '!' }); }, 300); },
+                setStatusMassal: function(rows, status) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Status "' + status + '" diterapkan ke ' + rows.length + ' siswa!' }); }, 300); },
+                hapusDataSiswaMassal: function(rows) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: ' + rows.length + ' siswa dihapus sekaligus!' }); }, 300); },
+                getDataWaliKelasAdmin: function() { setTimeout(function(){ cb([
+                  { rowIndex: 2, kelas: '7A', nama: 'Nama Wali Kelas 7A', noWA: '628123456789' }
+                ]); }, 200); },
+                simpanWaliKelas: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Data wali kelas disimpan!' }); }, 300); },
+                hapusWaliKelas: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Data wali kelas dihapus!' }); }, 300); },
+                getWaNotifStatus: function() { setTimeout(function(){ cb({ success: true, status: { user: true, admin: true, superadmin: true } }); }, 200); },
+                setWaNotifStatus: function(token, role, aktif) { setTimeout(function(){ cb({ success: true, role: role, enabled: !!aktif, message: '✓ Mock: Notifikasi WA untuk ' + role + ' ' + (aktif ? 'diaktifkan' : 'dinonaktifkan') + '!' }); }, 300); },
+                getDaftarAkun: function() { setTimeout(function(){ cb([
+                  { rowIndex: 2, username: 'admin', role: 'admin', status: 'AKTIF' },
+                  { rowIndex: 3, username: 'superadmin', role: 'superadmin', status: 'AKTIF' }
+                ]); }, 200); },
+                simpanAkun: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Akun disimpan!' }); }, 300); },
+                setStatusAkun: function(token, rowIndex, status) { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Status akun diubah menjadi ' + status + '!' }); }, 300); },
+                hapusAkun: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Akun dihapus!' }); }, 300); },
+                getSuperadminPinStatus: function() { setTimeout(function(){ cb({ success: true, isSet: false }); }, 200); },
+                setSuperadminPin: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: PIN Superadmin disimpan!' }); }, 300); },
+                checkSessionValid: function() { setTimeout(function(){ cb({ valid: true, role: userRole }); }, 100); }
               };
+              return runner;
             }
-          })
+          }
         }
       };
     }
