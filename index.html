@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Aplikasi BK Pro Multi-Tahun & Lightbox</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -76,6 +76,23 @@
     @media (max-width: 767px) {
       input, select, textarea { font-size: 16px !important; }
     }
+    /* ===================== FIX TAMPILAN MOBILE / IFRAME GOOGLE SITES ===================== */
+    html { -webkit-text-size-adjust: 100%; }
+    body { min-height: 100vh; min-height: 100dvh; overflow-x: hidden; }
+    /* Ruang kosong di bawah supaya konten paling bawah tidak tertutup bar Safari / home indicator */
+    #app-content > main { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem); }
+    /* Strip tab mobile: satu baris, bisa digeser ke samping, tidak makan tempat */
+    .mobile-tabs-scroll {
+      display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    }
+    .mobile-tabs-scroll::-webkit-scrollbar { display: none; }
+    .mobile-tabs-scroll > button { white-space: nowrap; flex: 1 0 auto; }
+    /* Elemen sticky tidak boleh kepotong poni/status bar */
+    #mobile-tabs-bar { padding-top: max(8px, env(safe-area-inset-top, 0px)); }
+    @media (max-width: 640px) {
+      #toast { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+    }
   </style>
 </head>
 
@@ -137,7 +154,7 @@
 
   <!-- ===================== APP CONTENT ===================== -->
   <div id="app-content">
-    <nav class="sticky top-0 z-[60] px-3 sm:px-4 py-2 sm:py-3">
+    <nav class="relative md:sticky md:top-0 z-[60] px-3 sm:px-4 py-2 sm:py-3">
       <div class="max-w-6xl mx-auto">
         <div class="bg-white/80 backdrop-blur-md border border-white/20 shadow-lg rounded-[2rem] px-4 sm:px-6 py-2 flex flex-wrap gap-y-2 justify-between items-center md:grid md:grid-cols-3 md:gap-4">
           <div class="flex items-center gap-2 sm:gap-3 min-w-0 md:justify-self-start">
@@ -182,16 +199,19 @@
           </div>
         </div>
 
-        <!-- Navigasi tab khusus mobile (di bawah md, tombol atas disembunyikan) -->
-        <div class="md:hidden mt-2 bg-white/80 backdrop-blur-md border border-white/20 shadow-lg rounded-2xl p-2 flex flex-wrap gap-1.5">
-          <button onclick="showTab('input')" id="btn-input-mobile" class="nav-link-mobile tab-active text-center px-2 py-2 rounded-xl text-xs font-semibold transition-all flex-1 basis-[30%]">Input Data</button>
-          <button onclick="showTab('rekap')" id="btn-rekap-mobile" class="loggedin-only hidden nav-link-mobile text-center px-2 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all flex-1 basis-[30%]">Rekap Laporan</button>
-          <button onclick="showTab('grafik')" id="btn-grafik-mobile" class="loggedin-only hidden nav-link-mobile text-center px-2 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all flex-1 basis-[30%]">Grafik Tren</button>
-          <button onclick="showTab('admin')" id="btn-admin-mobile" class="loggedin-only hidden nav-link-mobile text-center px-2 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all flex-1 basis-[30%]">Admin Siswa</button>
-          <button onclick="showTab('log')" id="btn-log-mobile" class="superadmin-only hidden nav-link-mobile text-center px-2 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all flex-1 basis-[30%]">Log Aktivitas</button>
-        </div>
       </div>
     </nav>
+
+    <!-- Navigasi tab mobile: sticky, satu baris, solid (tidak tembus pandang) -->
+    <div id="mobile-tabs-bar" class="md:hidden sticky top-0 z-[60] px-3 pb-2 bg-slate-50/95 backdrop-blur">
+        <div class="mobile-tabs-scroll bg-white border border-slate-200 shadow-md rounded-2xl p-1.5">
+          <button onclick="showTab('input')" id="btn-input-mobile" class="nav-link-mobile tab-active text-center px-3.5 py-2 rounded-xl text-xs font-semibold transition-all">Input Data</button>
+          <button onclick="showTab('rekap')" id="btn-rekap-mobile" class="loggedin-only hidden nav-link-mobile text-center px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all">Rekap Laporan</button>
+          <button onclick="showTab('grafik')" id="btn-grafik-mobile" class="loggedin-only hidden nav-link-mobile text-center px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all">Grafik Tren</button>
+          <button onclick="showTab('admin')" id="btn-admin-mobile" class="loggedin-only hidden nav-link-mobile text-center px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all">Admin Siswa</button>
+          <button onclick="showTab('log')" id="btn-log-mobile" class="superadmin-only hidden nav-link-mobile text-center px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-500 transition-all">Log Aktivitas</button>
+        </div>
+    </div>
 
     <main class="max-w-6xl mx-auto p-3 sm:p-4 md:p-8 animate-in">
 
