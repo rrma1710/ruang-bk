@@ -137,5 +137,75 @@ function setupSystem() {
     Logger.log("✓ Sheet Akun dibuat dengan akun default. SEGERA ganti password default lewat tab Kelola Akun di web!");
   }
 
+  // 7. Setup Sheet Aturan Sanksi (AturanSanksi) — ambang jumlah pelanggaran
+  //    per siswa yang memicu sanksi otomatis. Diisi lewat popup "Atur Sanksi"
+  //    di form Input Data (kategori Pelanggaran) atau panel "Aturan & Riwayat
+  //    Sanksi" di tab Admin Siswa.
+  let sheetAturanSanksi = ss.getSheetByName("AturanSanksi");
+  if (!sheetAturanSanksi) {
+    sheetAturanSanksi = ss.insertSheet("AturanSanksi");
+  }
+  if (sheetAturanSanksi.getLastRow() === 0) {
+    sheetAturanSanksi.appendRow([
+      "Nama Siswa", "Kelas", "Angkatan", "Ambang Pelanggaran", "Jenis Sanksi", "Diatur Oleh", "Tanggal Diatur"
+    ]);
+    sheetAturanSanksi.getRange(1, 1, 1, 7)
+      .setFontWeight("bold")
+      .setBackground("#1e293b")
+      .setFontColor("#ffffff");
+    sheetAturanSanksi.setColumnWidth(5, 260);
+    Logger.log("✓ Sheet AturanSanksi dibuat.");
+  }
+
+  // 8. Setup Sheet Riwayat Sanksi (RiwayatSanksi) — dicatat OTOMATIS oleh
+  //    sistem setiap kali jumlah pelanggaran seorang siswa mencapai kelipatan
+  //    ambang di sheet "AturanSanksi". Status default "Belum Selesai", diubah
+  //    manual jadi "Selesai" setelah penanganan tuntas.
+  let sheetRiwayatSanksi = ss.getSheetByName("RiwayatSanksi");
+  if (!sheetRiwayatSanksi) {
+    sheetRiwayatSanksi = ss.insertSheet("RiwayatSanksi");
+  }
+  if (sheetRiwayatSanksi.getLastRow() === 0) {
+    sheetRiwayatSanksi.appendRow([
+      "Tanggal", "Nama Siswa", "Kelas", "Angkatan", "Jumlah Pelanggaran", "Ambang", "Jenis Sanksi", "Status", "Keterangan"
+    ]);
+    sheetRiwayatSanksi.getRange(1, 1, 1, 9)
+      .setFontWeight("bold")
+      .setBackground("#1e293b")
+      .setFontColor("#ffffff");
+    sheetRiwayatSanksi.setColumnWidth(7, 220);
+    sheetRiwayatSanksi.setColumnWidth(9, 220);
+    Logger.log("✓ Sheet RiwayatSanksi dibuat.");
+  }
+
+  // 9. Setup Sheet Tingkat & Poin (TingkatPoin) — daftar tingkat yang bisa
+  //    dipilih pelapor saat kategori laporan "Pelanggaran" atau "Prestasi"
+  //    (mis. Ringan/Sedang/Berat), masing-masing dengan nilai poin. Poin ini
+  //    otomatis tersimpan ke Sheet1 tiap laporan baru. Diatur lewat panel
+  //    "Kelola Tingkat & Poin" di tab Admin Siswa — tidak perlu edit sheet
+  //    ini secara manual.
+  let sheetTingkatPoin = ss.getSheetByName("TingkatPoin");
+  if (!sheetTingkatPoin) {
+    sheetTingkatPoin = ss.insertSheet("TingkatPoin");
+  }
+  if (sheetTingkatPoin.getLastRow() === 0) {
+    sheetTingkatPoin.appendRow(["Kategori", "Nama Tingkat", "Poin"]);
+    sheetTingkatPoin.getRange(1, 1, 1, 3)
+      .setFontWeight("bold")
+      .setBackground("#1e293b")
+      .setFontColor("#ffffff");
+
+    // Data awal contoh — silakan diubah/ditambah lewat panel "Kelola
+    // Tingkat & Poin" di tab Admin Siswa sesuai kebijakan sekolah.
+    sheetTingkatPoin.appendRow(["Pelanggaran", "Ringan", 1]);
+    sheetTingkatPoin.appendRow(["Pelanggaran", "Sedang", 3]);
+    sheetTingkatPoin.appendRow(["Pelanggaran", "Berat", 5]);
+    sheetTingkatPoin.appendRow(["Prestasi", "Tingkat Sekolah", 3]);
+    sheetTingkatPoin.appendRow(["Prestasi", "Tingkat Kecamatan/Kota", 5]);
+    sheetTingkatPoin.appendRow(["Prestasi", "Tingkat Provinsi", 8]);
+    sheetTingkatPoin.appendRow(["Prestasi", "Tingkat Nasional", 15]);
+    Logger.log("✓ Sheet TingkatPoin dibuat dengan data contoh.");
+  }
+
   Logger.log("✓ Inisialisasi Sheet Berhasil dilakukan!");
 }

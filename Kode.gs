@@ -165,6 +165,9 @@ const SHEET_ANGKATAN = "DaftarAngkatan";
 const SHEET_LOG       = "LogAktivitas";
 const SHEET_WALI      = "WaliKelas";
 const SHEET_AKUN      = "Akun";
+const SHEET_ATURAN_SANKSI  = "AturanSanksi";
+const SHEET_RIWAYAT_SANKSI = "RiwayatSanksi";
+const SHEET_TINGKAT_POIN   = "TingkatPoin";
 
 // Endpoint API Fonnte untuk kirim WhatsApp. Token disimpan di Script
 // Properties (bukan di kode), lihat fungsi setFonnteToken().
@@ -1255,6 +1258,55 @@ function _uploadFotoBase64(fileData, fileName, subfolderName) {
 }
 
 // ============================================================
+//  FOTO BUKTI KEJADIAN — DUKUNGAN MULTI FOTO (MAKS 10)
+//  Beberapa foto bukti untuk satu laporan disimpan sebagai BEBERAPA URL
+//  yang digabung jadi satu string di kolom "URL Bukti" (kolom 9), dipisah
+//  dengan " | ". Ini sengaja dipilih supaya TIDAK perlu menambah kolom baru
+//  di sheet — data lama (1 foto) tetap kompatibel karena cuma berisi 1 URL
+//  tanpa pemisah.
+// ============================================================
+
+// Menggabungkan array URL foto menjadi satu string untuk disimpan di sel.
+function _gabungUrlFoto(daftarUrl) {
+  const bersih = (daftarUrl || []).filter(function(u) { return u && u !== '-'; });
+  return bersih.length > 0 ? bersih.join(' | ') : '-';
+}
+
+// Mengunggah beberapa file bukti sekaligus (maks 10, divalidasi ulang di sini
+// demi keamanan meskipun client sudah membatasi). Mengembalikan
+// { urls: string[], hardFail, message }. hardFail=true -> baris JANGAN disimpan
+// (dipertahankan sama seperti perilaku _uploadFotoBase64 untuk 1 file).
+function _uploadBanyakFotoBase64(daftarFile, subfolderName) {
+  const urls = [];
+  if (!Array.isArray(daftarFile) || daftarFile.length === 0) return { urls: urls, hardFail: false };
+
+  if (daftarFile.length > 10) {
+    return { urls: [], hardFail: true, message: 'Maksimal 10 foto per laporan.' };
+  }
+
+  for (let i = 0; i < daftarFile.length; i++) {
+    const f = daftarFile[i];
+    if (!f || !f.fileData || !f.fileName) continue;
+    const hasil = _uploadFotoBase64(f.fileData, f.fileName, subfolderName);
+    if (hasil.hardFail) {
+      return { urls: urls, hardFail: true, message: 'Foto #' + (i + 1) + ' (' + f.fileName + '): ' + hasil.message };
+    }
+    urls.push(hasil.url);
+  }
+  return { urls: urls, hardFail: false };
+}
+
+// Menghapus SEMUA file Drive dari satu sel "URL Bukti" yang mungkin berisi
+// lebih dari satu URL (digabung dengan " | ", lihat _gabungUrlFoto). Aman
+// dipanggil dengan URL kosong / single URL data lama.
+function _hapusSemuaFileDriveDariUrlGabungan(urlGabungan) {
+  if (!urlGabungan || typeof urlGabungan !== 'string') return;
+  urlGabungan.split('|').forEach(function(u) {
+    _hapusFileDriveDariUrl(u.trim());
+  });
+}
+
+// ============================================================
 //  MANAJEMEN DATA WALI KELAS (Kelas, Nama, No. WA)
 //  Dikelola sepenuhnya lewat web (tab Admin, khusus Superadmin) —
 //  tidak perlu edit sheet manual. Dipakai sebagai sumber nomor tujuan
@@ -1541,16 +1593,24 @@ function simpanData(dataForm, token) {
     
     _ensureHeader(sheet);
 
-    // Foto bukti kejadian: satu file, dipakai bersama untuk seluruh baris laporan ini
-    // (karena biasanya cuma satu foto kejadian, bukan per-siswa).
+    // Foto bukti kejadian: bisa lebih dari satu (maks 10), dipakai bersama
+    // untuk seluruh baris laporan ini (karena biasanya kejadian yang sama,
+    // bukan per-siswa). Semua URL hasil upload digabung jadi satu string.
     let fileUrl = "-";
-    if (dataForm.fileData && dataForm.fileName) {
+    if (Array.isArray(dataForm.filesData) && dataForm.filesData.length > 0) {
+      const hasil = _uploadBanyakFotoBase64(dataForm.filesData, 'Foto Bukti Kejadian');
+      if (hasil.hardFail) return { success: false, message: hasil.message };
+      fileUrl = _gabungUrlFoto(hasil.urls);
+    } else if (dataForm.fileData && dataForm.fileName) {
+      // Kompatibilitas dengan client versi lama (kirim 1 file saja).
       const hasil = _uploadFotoBase64(dataForm.fileData, dataForm.fileName, 'Foto Bukti Kejadian');
       if (hasil.hardFail) return { success: false, message: hasil.message };
       fileUrl = hasil.url;
     }
 
     const timestamp = new Date();
+    const kategoriForm = String(dataForm.kategori || '').trim();
+    const sanksiTerpicu = []; // kumpulan sanksi yang otomatis terpicu di penyimpanan ini (lihat _cekDanCatatSanksiOtomatis)
     for (let idx = 0; idx < dataForm.daftarSiswa.length; idx++) {
       const item = dataForm.daftarSiswa[idx];
 
@@ -1566,6 +1626,14 @@ function simpanData(dataForm, token) {
         suratUrl = hasilSurat.url;
       }
 
+      // Tingkat & Poin: hanya relevan untuk kategori Pelanggaran/Prestasi
+      // (lihat opsi "Tingkat" di form Input Data). Poin SELALU dicari ulang
+      // di server dari sheet TingkatPoin berdasarkan kategori+tingkat yang
+      // dipilih pelapor — nilai poin dari klien tidak dipercaya begitu saja,
+      // supaya tetap konsisten kalau aturan poinnya diubah admin nanti.
+      const tingkatForm = String(dataForm.tingkat || '').trim();
+      const poinForm = tingkatForm ? _cariPoinTingkat(kategoriForm, tingkatForm) : 0;
+
       sheet.appendRow([
         timestamp,                   // Col 1: Timestamp
         dataForm.tglKejadian,        // Col 2: Tanggal Kejadian
@@ -1576,8 +1644,18 @@ function simpanData(dataForm, token) {
         dataForm.kasus,              // Col 7: Kasus / Prestasi
         dataForm.tindakan,           // Col 8: Tindakan
         fileUrl,                     // Col 9: URL Bukti (foto kejadian, shared)
-        suratUrl                     // Col 10: URL Surat Pernyataan (per siswa)
+        suratUrl,                    // Col 10: URL Surat Pernyataan (per siswa)
+        tingkatForm,                 // Col 11: Tingkat (Ringan/Sedang/Berat, dst)
+        poinForm                     // Col 12: Poin (otomatis dari Tingkat)
       ]);
+
+      // Cek ambang sanksi otomatis — hanya relevan untuk kategori "Pelanggaran"
+      // (lihat popup "Atur Sanksi" di form Input Data & panel Aturan Sanksi
+      // di tab Admin Siswa untuk mengatur ambangnya per siswa).
+      if (kategoriForm === 'Pelanggaran') {
+        const hasilSanksi = _cekDanCatatSanksiOtomatis(item.nama, item.kelas, item.angkatan || '');
+        if (hasilSanksi) sanksiTerpicu.push(hasilSanksi);
+      }
     }
 
     // Catat ke Log Aktivitas: prioritas identitas -> (1) user yang sedang login lewat
@@ -1624,9 +1702,22 @@ function simpanData(dataForm, token) {
       }
     }
 
+    // Info tambahan kalau ada sanksi yang otomatis terpicu (siswa mencapai
+    // kelipatan ambang pelanggaran yang diatur untuknya) — tercatat di sheet
+    // "RiwayatSanksi" berstatus "Belum Selesai", bisa dipantau/diubah
+    // statusnya di panel "Aturan & Riwayat Sanksi" (tab Admin Siswa).
+    let infoSanksi = '';
+    if (sanksiTerpicu.length > 0) {
+      const ringkasanSanksi = sanksiTerpicu.map(function(s) {
+        return s.nama + ' (' + s.jumlah + 'x pelanggaran, sanksi: ' + s.jenisSanksi + ')';
+      }).join(' | ');
+      _appendLogRow(logUsername, logRole, 'Sanksi Otomatis Terpicu', ringkasanSanksi, deviceLogin);
+      infoSanksi = ' ⚠ Sanksi otomatis terpicu: ' + ringkasanSanksi;
+    }
+
     return {
       success: true,
-      message: "✓ Berhasil menyimpan " + dataForm.daftarSiswa.length + " data laporan siswa!" + infoWA
+      message: "✓ Berhasil menyimpan " + dataForm.daftarSiswa.length + " data laporan siswa!" + infoWA + infoSanksi
     };
   } catch (error) {
     return { success: false, message: "Gagal menyimpan: " + error.toString() };
@@ -1645,11 +1736,15 @@ function getDashboardStats(token) {
 
     const ss    = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_DATA) || ss.getSheets()[0];
+    const sanksiPending = _hitungSanksiBelumSelesai();
+
     if (sheet.getLastRow() < 2) {
       return {
         totalLaporanBulanIni: 0, totalPelanggaranBulanIni: 0, totalPrestasiBulanIni: 0,
         kelasPalingBanyakKasus: null, siswaPelanggaranTerbanyak: null, siswaPrestasiTerbanyak: null,
-        totalLaporanKeseluruhan: 0
+        totalLaporanKeseluruhan: 0,
+        sanksiBelumSelesaiJumlah: sanksiPending.jumlah,
+        sanksiBelumSelesaiNama: sanksiPending.namaList
       };
     }
 
@@ -1713,11 +1808,39 @@ function getDashboardStats(token) {
       kelasPalingBanyakKasus: kelasTop ? { kelas: kelasTop.nama, jumlah: kelasTop.jumlah } : null,
       siswaPelanggaranTerbanyak: topEntry(siswaPelanggaran),
       siswaPrestasiTerbanyak: topEntry(siswaPrestasi),
-      totalLaporanKeseluruhan: values.length
+      totalLaporanKeseluruhan: values.length,
+      sanksiBelumSelesaiJumlah: sanksiPending.jumlah,
+      sanksiBelumSelesaiNama: sanksiPending.namaList
     };
   } catch (e) {
     console.error('getDashboardStats error:', e);
     throw e;
+  }
+}
+
+// Hitung berapa baris di sheet "RiwayatSanksi" yang statusnya masih
+// "Belum Selesai" (sanksi sudah terpicu otomatis tapi belum ditangani),
+// dipakai untuk badge counter di Dashboard Ringkasan supaya admin langsung
+// lihat tanpa perlu buka tab Admin Siswa dulu. namaList berisi maksimal 3
+// nama siswa terbaru yang masih menunggu penanganan, untuk subteks kartu.
+function _hitungSanksiBelumSelesai() {
+  try {
+    const data = _getRiwayatSanksiSheetAndRows();
+    const pending = data.values.filter(function(row) {
+      return String(row[7] || '').trim() !== 'Selesai';
+    });
+    // Urutkan dari yang terbaru (tanggal paling akhir) supaya nama yang
+    // ditampilkan di subteks kartu adalah kasus yang paling baru terpicu.
+    pending.sort(function(a, b) {
+      const ta = a[0] instanceof Date ? a[0].getTime() : 0;
+      const tb = b[0] instanceof Date ? b[0].getTime() : 0;
+      return tb - ta;
+    });
+    const namaList = pending.slice(0, 3).map(function(row) { return String(row[1] || '').trim(); });
+    return { jumlah: pending.length, namaList: namaList };
+  } catch (e) {
+    console.warn('Gagal menghitung sanksi belum selesai:', e);
+    return { jumlah: 0, namaList: [] };
   }
 }
 
@@ -1742,18 +1865,424 @@ function _ensureHeader(sheet) {
   if (sheet.getLastRow() === 0) {
     sheet.appendRow([
       "Timestamp", "Tgl Kejadian", "Nama Siswa", "Kelas",
-      "Angkatan", "Kategori", "Kasus / Prestasi", "Tindakan", "URL Bukti", "URL Surat Pernyataan"
+      "Angkatan", "Kategori", "Kasus / Prestasi", "Tindakan", "URL Bukti", "URL Surat Pernyataan",
+      "Tingkat", "Poin"
     ]);
-    sheet.getRange(1, 1, 1, 10).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+    sheet.getRange(1, 1, 1, 12).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
     return;
   }
 
   // Migrasi: tambahkan kolom URL Surat Pernyataan jika sheet lama belum punya kolom ke-10
-  const lastCol = Math.max(10, sheet.getLastColumn());
+  const lastCol = Math.max(12, sheet.getLastColumn());
   const header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   if (String(header[9] || '').trim().toLowerCase() !== 'url surat pernyataan') {
     sheet.getRange(1, 10).setValue('URL Surat Pernyataan')
       .setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  }
+
+  // Migrasi: tambahkan kolom Tingkat & Poin jika sheet lama belum punya kolom ke-11/12.
+  if (String(header[10] || '').trim().toLowerCase() !== 'tingkat') {
+    sheet.getRange(1, 11).setValue('Tingkat')
+      .setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  }
+  if (String(header[11] || '').trim().toLowerCase() !== 'poin') {
+    sheet.getRange(1, 12).setValue('Poin')
+      .setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  }
+}
+
+// ============================================================
+//  ATURAN & RIWAYAT SANKSI SISWA
+//  - Sheet "AturanSanksi": satu baris per siswa yang punya aturan ambang
+//    pelanggaran (mis. "3x pelanggaran -> Panggil orang tua"). Diisi lewat
+//    popup di form Input Data (kategori "Pelanggaran") atau lewat panel
+//    "Aturan & Riwayat Sanksi" di tab Admin Siswa. Boleh diisi siapa saja
+//    yang melapor (termasuk pengunjung belum login), sama seperti simpanData.
+//  - Sheet "RiwayatSanksi": dicatat OTOMATIS oleh sistem (lewat
+//    _cekDanCatatSanksiOtomatis, dipanggil dari simpanData) setiap kali
+//    jumlah pelanggaran seorang siswa mencapai KELIPATAN ambang yang
+//    diatur untuknya (3x, lalu 6x, 9x, dst — supaya sanksi bisa berulang
+//    untuk pelanggar berat, bukan cuma sekali). Statusnya defaultnya
+//    "Belum Selesai", lalu bisa diubah manual jadi "Selesai" oleh
+//    Admin/Superadmin setelah penanganan tuntas.
+// ============================================================
+function _getAturanSanksiSheetAndRows() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_ATURAN_SANKSI);
+  if (!sheet) sheet = ss.insertSheet(SHEET_ATURAN_SANKSI);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Nama Siswa", "Kelas", "Angkatan", "Ambang Pelanggaran", "Jenis Sanksi", "Diatur Oleh", "Tanggal Diatur"]);
+    sheet.getRange(1, 1, 1, 7).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  }
+  const lastRow = sheet.getLastRow();
+  const values = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, 7).getValues() : [];
+  return { sheet: sheet, values: values };
+}
+
+function _getRiwayatSanksiSheetAndRows() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_RIWAYAT_SANKSI);
+  if (!sheet) sheet = ss.insertSheet(SHEET_RIWAYAT_SANKSI);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Tanggal", "Nama Siswa", "Kelas", "Angkatan", "Jumlah Pelanggaran", "Ambang", "Jenis Sanksi", "Status", "Keterangan"]);
+    sheet.getRange(1, 1, 1, 9).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+  }
+  const lastRow = sheet.getLastRow();
+  const values = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, 9).getValues() : [];
+  return { sheet: sheet, values: values };
+}
+
+// Cari aturan sanksi milik seorang siswa (dicocokkan berdasarkan Nama Siswa,
+// tanpa memandang huruf besar/kecil — sama seperti pencocokan nama di
+// Dashboard Ringkasan) supaya tetap ketemu walau siswa itu sekarang pindah kelas.
+function _getAturanSanksiUntukSiswa(nama) {
+  const namaLower = String(nama || '').trim().toLowerCase();
+  if (!namaLower) return null;
+  const data = _getAturanSanksiSheetAndRows();
+  for (let i = 0; i < data.values.length; i++) {
+    const row = data.values[i];
+    if (String(row[0] || '').trim().toLowerCase() === namaLower) {
+      return { ambang: Number(row[3]) || 0, jenisSanksi: String(row[4] || '').trim(), rowIndex: i + 2 };
+    }
+  }
+  return null;
+}
+
+// Menghitung total baris berkategori "Pelanggaran" milik seorang siswa
+// sepanjang riwayat (Sheet1), dipakai untuk mengecek apakah sudah melewati
+// ambang sanksi yang diatur untuknya.
+function _hitungJumlahPelanggaran(nama) {
+  const namaLower = String(nama || '').trim().toLowerCase();
+  if (!namaLower) return 0;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_DATA) || ss.getSheets()[0];
+  if (sheet.getLastRow() < 2) return 0;
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(6, sheet.getLastColumn())).getValues();
+  let jumlah = 0;
+  values.forEach(function(row) {
+    const namaRow = String(row[2] || '').trim().toLowerCase();
+    const kategoriRow = String(row[5] || '').trim();
+    if (namaRow === namaLower && kategoriRow === 'Pelanggaran') jumlah++;
+  });
+  return jumlah;
+}
+
+// Tambah baru (kalau siswa belum punya aturan) atau perbarui (upsert
+// berdasarkan Nama Siswa) aturan sanksi. TIDAK dibatasi role — pelapor
+// (termasuk pengunjung belum login) boleh mengatur ini lewat popup di form
+// Input Data, sama seperti simpanData sendiri.
+function simpanAturanSanksi(token, dataAturan) {
+  try {
+    const nama = String((dataAturan && dataAturan.nama) || '').trim();
+    const kelas = String((dataAturan && dataAturan.kelas) || '').trim();
+    const angkatan = String((dataAturan && dataAturan.angkatan) || '').trim();
+    const ambang = parseInt((dataAturan && dataAturan.ambangPelanggaran), 10);
+    const jenisSanksi = String((dataAturan && dataAturan.jenisSanksi) || '').trim();
+
+    if (!nama) return { success: false, message: 'Nama siswa wajib diisi.' };
+    if (!ambang || ambang < 1) return { success: false, message: 'Ambang jumlah pelanggaran harus angka lebih dari 0.' };
+    if (!jenisSanksi) return { success: false, message: 'Jenis/bentuk sanksi wajib diisi.' };
+
+    const data = _getAturanSanksiSheetAndRows();
+    let rowFound = -1;
+    for (let i = 0; i < data.values.length; i++) {
+      if (String(data.values[i][0] || '').trim().toLowerCase() === nama.toLowerCase()) {
+        rowFound = i + 2;
+        break;
+      }
+    }
+
+    const pencatat = _getUsernameFromToken(token) || String((dataAturan && dataAturan.dicatatOleh) || '').trim() || 'Pengunjung (belum login)';
+
+    if (rowFound > 0) {
+      data.sheet.getRange(rowFound, 1, 1, 7).setValues([[nama, kelas, angkatan, ambang, jenisSanksi, pencatat, new Date()]]);
+    } else {
+      data.sheet.appendRow([nama, kelas, angkatan, ambang, jenisSanksi, pencatat, new Date()]);
+    }
+
+    _catatLog(token, 'Atur Aturan Sanksi', nama + ' - ambang ' + ambang + 'x pelanggaran -> "' + jenisSanksi + '"');
+
+    return { success: true, message: '✓ Aturan sanksi untuk ' + nama + ' disimpan (setiap ' + ambang + 'x pelanggaran).' };
+  } catch (e) {
+    return { success: false, message: 'Gagal menyimpan aturan sanksi: ' + e.toString() };
+  }
+}
+
+// Daftar aturan sanksi untuk panel "Aturan & Riwayat Sanksi" (tab Admin
+// Siswa). Sekalian dihitungkan jumlah pelanggaran siswa itu SAAT INI supaya
+// admin bisa lihat langsung siapa yang sudah/hampir melewati ambang.
+function getAturanSanksiList(token) {
+  try {
+    _requireRole(token, ['admin', 'superadmin']);
+    const data = _getAturanSanksiSheetAndRows();
+    return data.values.map(function(row, index) {
+      const nama = String(row[0] || '').trim();
+      return {
+        rowIndex: index + 2,
+        nama: nama,
+        kelas: String(row[1] || '').trim(),
+        angkatan: String(row[2] || '').trim(),
+        ambang: Number(row[3]) || 0,
+        jenisSanksi: String(row[4] || '').trim(),
+        diaturOleh: String(row[5] || '').trim(),
+        tanggal: row[6] ? new Date(row[6]).toLocaleString('id-ID') : '',
+        jumlahSaatIni: nama ? _hitungJumlahPelanggaran(nama) : 0
+      };
+    }).filter(function(r) { return r.nama !== ''; });
+  } catch (e) {
+    console.error('getAturanSanksiList error:', e);
+    return [];
+  }
+}
+
+function hapusAturanSanksi(token, rowIndex) {
+  try {
+    _requireEditAccess(token);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_ATURAN_SANKSI);
+    const idx = Number(rowIndex);
+    if (!sheet || idx < 2 || idx > sheet.getLastRow()) {
+      return { success: false, message: 'Baris tidak valid.' };
+    }
+    const nama = sheet.getRange(idx, 1).getValue();
+    sheet.deleteRow(idx);
+    _catatLog(token, 'Hapus Aturan Sanksi', String(nama || '-'));
+    return { success: true, message: '✓ Aturan sanksi berhasil dihapus.' };
+  } catch (e) {
+    return { success: false, message: 'Gagal menghapus aturan sanksi: ' + e.toString() };
+  }
+}
+
+// Dipanggil dari simpanData setiap kali sebuah baris "Pelanggaran" baru
+// disimpan untuk seorang siswa. Kalau siswa itu punya aturan sanksi DAN
+// jumlah pelanggarannya sekarang tepat kelipatan ambang (3x, 6x, 9x, dst —
+// supaya sanksi bisa terpicu berulang untuk pelanggar berat, bukan cuma
+// sekali di awal), catat satu baris baru ke RiwayatSanksi berstatus
+// "Belum Selesai". Ada pengaman anti-duplikat kalau fungsi ini kebetulan
+// terpanggil dua kali untuk jumlah yang sama.
+function _cekDanCatatSanksiOtomatis(nama, kelas, angkatan) {
+  try {
+    const aturan = _getAturanSanksiUntukSiswa(nama);
+    if (!aturan || !aturan.ambang) return null;
+
+    const jumlah = _hitungJumlahPelanggaran(nama);
+    if (jumlah < aturan.ambang) return null;
+    if (jumlah % aturan.ambang !== 0) return null;
+
+    const data = _getRiwayatSanksiSheetAndRows();
+    const sudahAda = data.values.some(function(row) {
+      return String(row[1] || '').trim().toLowerCase() === String(nama).trim().toLowerCase() && Number(row[4]) === jumlah;
+    });
+    if (sudahAda) return null;
+
+    data.sheet.appendRow([new Date(), nama, kelas || '', angkatan || '', jumlah, aturan.ambang, aturan.jenisSanksi, 'Belum Selesai', '']);
+
+    return { nama: nama, jumlah: jumlah, ambang: aturan.ambang, jenisSanksi: aturan.jenisSanksi };
+  } catch (e) {
+    console.warn('Gagal mengecek/mencatat sanksi otomatis:', e);
+    return null;
+  }
+}
+
+// Daftar riwayat sanksi yang sudah terpicu, untuk panel Admin Siswa.
+// Terbaru ditampilkan di atas.
+function getRiwayatSanksiList(token) {
+  try {
+    _requireRole(token, ['admin', 'superadmin']);
+    const data = _getRiwayatSanksiSheetAndRows();
+    return data.values.map(function(row, index) {
+      return {
+        rowIndex: index + 2,
+        tanggal: row[0] ? new Date(row[0]).toLocaleString('id-ID') : '',
+        nama: String(row[1] || '').trim(),
+        kelas: String(row[2] || '').trim(),
+        angkatan: String(row[3] || '').trim(),
+        jumlah: Number(row[4]) || 0,
+        ambang: Number(row[5]) || 0,
+        jenisSanksi: String(row[6] || '').trim(),
+        status: String(row[7] || '').trim() || 'Belum Selesai',
+        keterangan: String(row[8] || '').trim()
+      };
+    }).filter(function(r) { return r.nama !== ''; }).reverse();
+  } catch (e) {
+    console.error('getRiwayatSanksiList error:', e);
+    return [];
+  }
+}
+
+// Mengubah status penanganan sanksi ("Belum Selesai" <-> "Selesai"),
+// dengan keterangan opsional (mis. "Sudah dipanggil orang tua tgl ...").
+function updateStatusSanksi(token, rowIndex, statusBaru, keterangan) {
+  try {
+    _requireEditAccess(token);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_RIWAYAT_SANKSI);
+    const idx = Number(rowIndex);
+    if (!sheet || idx < 2 || idx > sheet.getLastRow()) {
+      return { success: false, message: 'Baris tidak valid.' };
+    }
+    const status = (String(statusBaru || '').trim() === 'Selesai') ? 'Selesai' : 'Belum Selesai';
+    sheet.getRange(idx, 8).setValue(status);
+    if (typeof keterangan === 'string') sheet.getRange(idx, 9).setValue(keterangan);
+    const nama = sheet.getRange(idx, 2).getValue();
+
+    _catatLog(token, 'Update Status Sanksi', nama + ' -> ' + status);
+
+    return { success: true, message: '✓ Status sanksi berhasil diperbarui menjadi "' + status + '".' };
+  } catch (e) {
+    return { success: false, message: 'Gagal memperbarui status sanksi: ' + e.toString() };
+  }
+}
+
+// ============================================================
+//  TINGKAT & POIN (Ringan/Sedang/Berat, dst) UNTUK PELANGGARAN & PRESTASI
+//  - Sheet "TingkatPoin": daftar tingkat yang bisa dipilih pelapor saat
+//    kategori laporan "Pelanggaran" atau "Prestasi", masing-masing dengan
+//    nilai poin. Diatur oleh Admin/Superadmin lewat panel "Kelola Tingkat
+//    & Poin" di tab Admin Siswa.
+//  - Saat pelapor memilih tingkat di form Input Data, poin-nya otomatis
+//    ikut tersimpan ke Sheet1 (kolom "Tingkat" & "Poin") — TIDAK dipercaya
+//    dari input klien, selalu dicari ulang di server (lihat _cariPoinTingkat)
+//    supaya nilainya konsisten dengan aturan yang berlaku saat ini.
+// ============================================================
+function _getTingkatPoinSheetAndRows() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_TINGKAT_POIN);
+  if (!sheet) sheet = ss.insertSheet(SHEET_TINGKAT_POIN);
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Kategori", "Nama Tingkat", "Poin"]);
+    sheet.getRange(1, 1, 1, 3).setFontWeight('bold').setBackground('#1e293b').setFontColor('#ffffff');
+
+    // Data awal contoh — silakan diubah/ditambah lewat panel "Kelola Tingkat
+    // & Poin" di tab Admin Siswa sesuai kebijakan sekolah.
+    const seed = [
+      ["Pelanggaran", "Ringan", 1],
+      ["Pelanggaran", "Sedang", 3],
+      ["Pelanggaran", "Berat", 5],
+      ["Prestasi", "Tingkat Sekolah", 3],
+      ["Prestasi", "Tingkat Kecamatan/Kota", 5],
+      ["Prestasi", "Tingkat Provinsi", 8],
+      ["Prestasi", "Tingkat Nasional", 15]
+    ];
+    seed.forEach(function(row) { sheet.appendRow(row); });
+  }
+  const lastRow = sheet.getLastRow();
+  const values = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, 3).getValues() : [];
+  return { sheet: sheet, values: values };
+}
+
+// Dipakai form Input Data (termasuk pengunjung belum login) untuk mengisi
+// dropdown "Tingkat" setelah kategori Pelanggaran/Prestasi dipilih, DAN oleh
+// panel admin untuk menampilkan daftar yang bisa diedit/dihapus.
+function getDaftarTingkatPoin() {
+  try {
+    const data = _getTingkatPoinSheetAndRows();
+    return data.values.map(function(row, index) {
+      return {
+        rowIndex: index + 2,
+        kategori: String(row[0] || '').trim(),
+        tingkat: String(row[1] || '').trim(),
+        poin: Number(row[2]) || 0
+      };
+    }).filter(function(r) { return r.tingkat !== ''; });
+  } catch (e) {
+    console.error('getDaftarTingkatPoin error:', e);
+    return [];
+  }
+}
+
+// Cari poin sebuah tingkat berdasarkan kategori + nama tingkat (case-insensitive).
+// Dipakai internal oleh simpanData/editData supaya poin yang tersimpan SELALU
+// sesuai aturan terbaru di sheet TingkatPoin, bukan sekadar dipercaya dari klien.
+function _cariPoinTingkat(kategori, tingkat) {
+  const kategoriLower = String(kategori || '').trim().toLowerCase();
+  const tingkatLower = String(tingkat || '').trim().toLowerCase();
+  if (!kategoriLower || !tingkatLower) return 0;
+  const data = _getTingkatPoinSheetAndRows();
+  for (let i = 0; i < data.values.length; i++) {
+    const row = data.values[i];
+    if (String(row[0] || '').trim().toLowerCase() === kategoriLower &&
+        String(row[1] || '').trim().toLowerCase() === tingkatLower) {
+      return Number(row[2]) || 0;
+    }
+  }
+  return 0;
+}
+
+// Tambah baru atau perbarui (upsert berdasarkan Kategori + Nama Tingkat)
+// satu baris aturan poin. Khusus Admin/Superadmin (lewat panel "Kelola
+// Tingkat & Poin" di tab Admin Siswa).
+function simpanTingkatPoin(token, dataTingkat) {
+  try {
+    _requireEditAccess(token);
+
+    const kategori = String((dataTingkat && dataTingkat.kategori) || '').trim();
+    const tingkat = String((dataTingkat && dataTingkat.tingkat) || '').trim();
+    const poin = Number((dataTingkat && dataTingkat.poin));
+
+    if (kategori !== 'Pelanggaran' && kategori !== 'Prestasi') {
+      return { success: false, message: 'Kategori harus "Pelanggaran" atau "Prestasi".' };
+    }
+    if (!tingkat) return { success: false, message: 'Nama tingkat wajib diisi.' };
+    if (isNaN(poin) || poin < 0) return { success: false, message: 'Poin harus angka 0 atau lebih.' };
+
+    const data = _getTingkatPoinSheetAndRows();
+    let rowFound = -1;
+    for (let i = 0; i < data.values.length; i++) {
+      const row = data.values[i];
+      if (String(row[0] || '').trim().toLowerCase() === kategori.toLowerCase() &&
+          String(row[1] || '').trim().toLowerCase() === tingkat.toLowerCase()) {
+        rowFound = i + 2;
+        break;
+      }
+    }
+
+    if (rowFound > 0) {
+      data.sheet.getRange(rowFound, 1, 1, 3).setValues([[kategori, tingkat, poin]]);
+    } else {
+      data.sheet.appendRow([kategori, tingkat, poin]);
+    }
+
+    _catatLog(token, 'Atur Tingkat & Poin', kategori + ' - ' + tingkat + ' -> ' + poin + ' poin');
+
+    return { success: true, message: '✓ Tingkat "' + tingkat + '" (' + kategori + ') disimpan dengan ' + poin + ' poin.' };
+  } catch (e) {
+    return { success: false, message: 'Gagal menyimpan tingkat & poin: ' + e.toString() };
+  }
+}
+
+function hapusTingkatPoin(token, rowIndex) {
+  try {
+    _requireEditAccess(token);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_TINGKAT_POIN);
+    const idx = Number(rowIndex);
+    if (!sheet || idx < 2 || idx > sheet.getLastRow()) {
+      return { success: false, message: 'Baris tidak valid.' };
+    }
+    const tingkat = sheet.getRange(idx, 2).getValue();
+    sheet.deleteRow(idx);
+    _catatLog(token, 'Hapus Tingkat & Poin', String(tingkat || '-'));
+    return { success: true, message: '✓ Tingkat & poin berhasil dihapus.' };
+  } catch (e) {
+    return { success: false, message: 'Gagal menghapus tingkat & poin: ' + e.toString() };
+  }
+}
+
+function hapusRiwayatSanksi(token, rowIndex) {
+  try {
+    _requireEditAccess(token);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_RIWAYAT_SANKSI);
+    const idx = Number(rowIndex);
+    if (!sheet || idx < 2 || idx > sheet.getLastRow()) {
+      return { success: false, message: 'Baris tidak valid.' };
+    }
+    sheet.deleteRow(idx);
+    _catatLog(token, 'Hapus Riwayat Sanksi', 'Baris #' + idx);
+    return { success: true, message: '✓ Riwayat sanksi berhasil dihapus.' };
+  } catch (e) {
+    return { success: false, message: 'Gagal menghapus riwayat sanksi: ' + e.toString() };
   }
 }
 
@@ -1826,7 +2355,14 @@ function editData(token, dataEdit) {
     let fileUrl  = lastCol >= 9 ? sheet.getRange(sheetRow, 9).getValue() : sheet.getRange(sheetRow, 8).getValue();
     let suratUrl = lastCol >= 10 ? (sheet.getRange(sheetRow, 10).getValue() || '-') : '-';
 
-    if (dataEdit.fileData && dataEdit.fileName) {
+    if (Array.isArray(dataEdit.filesData) && dataEdit.filesData.length > 0) {
+      const hasil = _uploadBanyakFotoBase64(dataEdit.filesData, 'Foto Bukti Kejadian');
+      if (!hasil.hardFail && hasil.urls.length > 0) {
+        _hapusSemuaFileDriveDariUrlGabungan(fileUrl); // foto lama diganti set baru -> hapus dari Drive
+        fileUrl = _gabungUrlFoto(hasil.urls);
+      }
+    } else if (dataEdit.fileData && dataEdit.fileName) {
+      // Kompatibilitas dengan client versi lama (kirim 1 file saja).
       const hasil = _uploadFotoBase64(dataEdit.fileData, dataEdit.fileName, 'Foto Bukti Kejadian');
       if (!hasil.hardFail) fileUrl = hasil.url;
     }
@@ -1835,6 +2371,11 @@ function editData(token, dataEdit) {
       const hasilSurat = _uploadFotoBase64(dataEdit.suratFileData, dataEdit.suratFileName, 'Foto Surat Pernyataan');
       if (!hasilSurat.hardFail) suratUrl = hasilSurat.url;
     }
+
+    // Tingkat & Poin — sama seperti simpanData, poin selalu dihitung ulang
+    // di server dari kategori+tingkat terbaru (bukan dipercaya dari klien).
+    const tingkatEdit = String(dataEdit.tingkat || '').trim();
+    const poinEdit = tingkatEdit ? _cariPoinTingkat(dataEdit.kategori, tingkatEdit) : 0;
 
     sheet.getRange(sheetRow, 2).setValue(dataEdit.tglKejadian);
     sheet.getRange(sheetRow, 3).setValue(dataEdit.nama);
@@ -1845,6 +2386,8 @@ function editData(token, dataEdit) {
     sheet.getRange(sheetRow, 8).setValue(dataEdit.tindakan);
     sheet.getRange(sheetRow, 9).setValue(fileUrl);
     sheet.getRange(sheetRow, 10).setValue(suratUrl);
+    sheet.getRange(sheetRow, 11).setValue(tingkatEdit);
+    sheet.getRange(sheetRow, 12).setValue(poinEdit);
 
     _catatLog(token, 'Edit Laporan', 'Baris #' + dataEdit.rowIndex + ' - ' + dataEdit.nama + ' (' + dataEdit.kelas + ') - "' + dataEdit.kasus + '"');
 
@@ -1902,7 +2445,7 @@ function hapusData(token, rowIndex) {
 
     sheet.deleteRow(sheetRow);
 
-    _hapusFileDriveDariUrl(urlBukti);
+    _hapusSemuaFileDriveDariUrlGabungan(urlBukti);
     _hapusFileDriveDariUrl(urlSurat);
 
     _catatLog(token, 'Hapus Laporan', 'Baris #' + rowIndex + ' - ' + namaSiswa + ' - "' + kasusSiswa + '"');
@@ -1953,7 +2496,7 @@ function hapusDataMassal(token, daftarRowIndex) {
 
       sheet.deleteRow(sheetRow);
 
-      _hapusFileDriveDariUrl(urlBukti);
+      _hapusSemuaFileDriveDariUrlGabungan(urlBukti);
       _hapusFileDriveDariUrl(urlSurat);
     });
 

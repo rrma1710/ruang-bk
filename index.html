@@ -44,6 +44,31 @@
       width: 20px; height: 20px; animation: spin 0.7s linear infinite; display: inline-block;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* ===================== GLOBAL LOADING OVERLAY ===================== */
+    #global-loading-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(2px);
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+    }
+    #global-loading-overlay.show { opacity: 1; pointer-events: auto; }
+    .spinner-lg {
+      border: 4px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%;
+      width: 38px; height: 38px; animation: spin 0.7s linear infinite; display: inline-block;
+    }
+    .progress-track {
+      width: 100%; height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden;
+    }
+    .progress-bar-indeterminate {
+      height: 100%; width: 40%; border-radius: 999px;
+      background: linear-gradient(90deg, #3b82f6, #2563eb);
+      animation: progressIndeterminate 1.1s ease-in-out infinite;
+    }
+    @keyframes progressIndeterminate {
+      0%   { transform: translateX(-100%); }
+      50%  { transform: translateX(140%); }
+      100% { transform: translateX(280%); }
+    }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     .animate-in { animation: fadeIn 0.4s ease-out both; }
     /* Cegah browser mobile otomatis zoom saat fokus ke input/select/textarea.
@@ -60,6 +85,21 @@
   <div id="toast" class="bg-white border rounded-2xl shadow-xl px-5 py-4 flex items-center gap-3 min-w-[280px]">
     <div id="toast-icon" class="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"></div>
     <p id="toast-msg" class="font-semibold text-sm text-slate-700"></p>
+  </div>
+
+  <!-- ===================== OVERLAY LOADING GLOBAL =====================
+       Muncul otomatis setiap ada proses ke server (simpan, hapus, edit,
+       ambil data, dll) supaya pengguna tahu sistem sedang bekerja dan
+       tidak asal klik berkali-kali. Dikontrol lewat showGlobalLoading()/
+       hideGlobalLoading() di script bawah — lihat bungkusGoogleScriptRun(). -->
+  <div id="global-loading-overlay">
+    <div class="bg-white rounded-3xl shadow-2xl px-7 py-6 flex flex-col items-center gap-4 w-full max-w-[220px] animate-in">
+      <span class="spinner-lg"></span>
+      <p id="global-loading-msg" class="text-sm font-bold text-slate-600 text-center leading-snug">Memproses...</p>
+      <div class="progress-track">
+        <div class="progress-bar-indeterminate"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ===================== MODAL LOGIN ADMIN ===================== -->
@@ -163,6 +203,21 @@
             <h2 class="text-base sm:text-lg font-extrabold text-slate-800">📊 Ringkasan Bulan Ini</h2>
             <button onclick="loadDashboardStats()" class="text-[11px] sm:text-xs font-bold text-blue-600 hover:text-blue-700">🔄 Refresh</button>
           </div>
+          <!-- Badge Sanksi Belum Selesai — hanya tampil kalau jumlahnya > 0, biar
+               tidak makan tempat kalau tidak ada yang perlu ditindaklanjuti.
+               Klik untuk loncat ke panel "Aturan & Riwayat Sanksi" di tab Admin Siswa. -->
+          <div id="dash-sanksi-pending-banner" onclick="lompatKeRiwayatSanksi()"
+               class="hidden items-center gap-3 bg-amber-50 border-2 border-amber-300 rounded-2xl px-4 py-3 cursor-pointer hover:bg-amber-100 transition-colors">
+            <span class="text-2xl">🚨</span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-extrabold text-amber-800">
+                <span id="dash-sanksi-pending-jumlah">0</span> sanksi belum ditangani
+              </p>
+              <p id="dash-sanksi-pending-sub" class="text-[11px] text-amber-700 font-medium truncate"></p>
+            </div>
+            <span class="text-amber-600 text-xs font-bold whitespace-nowrap">Lihat &rarr;</span>
+          </div>
+
           <div id="dashboard-cards" class="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3">
             <div class="bg-white rounded-2xl border border-slate-200 p-3 sm:p-4">
               <p class="text-[10px] sm:text-[11px] font-bold text-slate-400 uppercase tracking-wide">Pelanggaran Bulan Ini</p>
@@ -217,13 +272,30 @@
 
               <div class="input-group">
                 <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Kategori</label>
-                <select id="kategori" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium">
+                <select id="kategori" required onchange="renderOpsiTingkat()" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium">
                   <option value="">-- Pilih Kategori --</option>
                   <option value="Pelanggaran">Pelanggaran</option>
                   <option value="Kasus">Kasus</option>
                   <option value="Prestasi">Prestasi</option>
                   <option value="Konseling">Konseling</option>
                 </select>
+              </div>
+            </div>
+
+            <!-- Tingkat & Poin — hanya tampil untuk kategori Pelanggaran/Prestasi.
+                 Daftar tingkat (Ringan/Sedang/Berat, dst) & poinnya diatur admin
+                 lewat panel "Kelola Tingkat & Poin" di tab Admin Siswa; pelapor
+                 tinggal pilih, poinnya otomatis mengikuti. -->
+            <div id="tingkat-poin-wrap" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div class="input-group">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Tingkat</label>
+                <select id="tingkat" onchange="updatePoinDisplay()" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium">
+                  <option value="">-- Pilih Tingkat --</option>
+                </select>
+              </div>
+              <div class="input-group flex flex-col justify-end">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Poin</label>
+                <div id="poin-display" class="w-full px-4 py-3 bg-slate-100 border border-slate-200 rounded-2xl font-extrabold text-slate-700">-</div>
               </div>
             </div>
 
@@ -279,10 +351,11 @@
                 <textarea id="tindakan" rows="3" required placeholder="Penanganan yang dilakukan..." class="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium resize-none"></textarea>
               </div>
               <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Foto Bukti Kejadian (Opsional)</label>
-                <p class="text-[11px] text-slate-400 italic mb-2">Foto ini berlaku untuk satu laporan (dipakai bersama untuk semua siswa yang terlibat) — boleh foto siswa sendirian atau berkelompok, sesuai kondisi kejadian sebenarnya.</p>
-                <input id="foto" type="file" accept="image/*,.pdf" onchange="displayFileName(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:bg-blue-50 file:text-blue-700 font-semibold">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Foto Bukti Kejadian (Opsional, maks. 10 foto)</label>
+                <p class="text-[11px] text-slate-400 italic mb-2">Foto ini berlaku untuk satu laporan (dipakai bersama untuk semua siswa yang terlibat) — boleh foto siswa sendirian atau berkelompok, sesuai kondisi kejadian sebenarnya. Bisa pilih beberapa foto sekaligus, atau klik lagi untuk menambah foto lain (maksimal 10 foto per laporan).</p>
+                <input id="foto" type="file" accept="image/*,.pdf" multiple onchange="handleFotoBuktiChange(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:bg-blue-50 file:text-blue-700 font-semibold">
                 <span id="file-name-display" class="text-xs text-slate-400 mt-1 block"></span>
+                <div id="preview-foto-bukti" class="flex flex-wrap gap-2 mt-2"></div>
               </div>
               <div>
                 <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Menulis Surat Pernyataan?</label>
@@ -388,6 +461,7 @@
                 <th class="p-3">Angkatan</th>
                 <th class="p-3">Kelas</th>
                 <th class="p-3">Kategori</th>
+                <th class="p-3 text-center">Poin</th>
                 <th class="p-3">Kasus / Prestasi</th>
                 <th class="p-3">Tindakan</th>
                 <th class="p-3 text-center">Bukti</th>
@@ -479,7 +553,7 @@
       <section id="tab-admin" class="hidden space-y-6">
         <div class="flex items-center justify-between">
           <h2 class="text-2xl font-extrabold text-slate-800">Admin Data Siswa & Naik Kelas</h2>
-          <button onclick="loadAdminData(); loadWaliKelasAdminData(); loadAkunAdminData(); loadPinStatus();" class="bg-white border px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50">Refresh Data</button>
+          <button onclick="loadAdminData(); loadWaliKelasAdminData(); loadAkunAdminData(); loadPinStatus(); loadAturanSanksiAdmin(); loadRiwayatSanksiAdmin(); loadTingkatPoinAdmin();" class="bg-white border px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50">Refresh Data</button>
         </div>
 
         <!-- Panel toggle "Akses Edit Admin" — HANYA terlihat oleh Superadmin.
@@ -788,6 +862,143 @@
           </form>
         </div>
 
+        <!-- Panel Aturan & Riwayat Sanksi — terlihat Admin & Superadmin.
+             Aturan (ambang jumlah pelanggaran -> jenis sanksi) diisi di sini
+             ATAU lewat popup "Atur Sanksi" saat pelapor menyimpan laporan
+             berkategori Pelanggaran di tab Input Data. Riwayat dicatat
+             OTOMATIS oleh sistem tiap kali jumlah pelanggaran siswa mencapai
+             kelipatan ambangnya — statusnya bisa diubah Selesai/Belum
+             Selesai di sini setelah ditangani. -->
+        <div id="panel-aturan-riwayat-sanksi" class="loggedin-only hidden bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+          <div class="flex items-center justify-between border-b pb-2">
+            <div>
+              <h3 class="font-bold text-slate-800">🚨 Aturan &amp; Riwayat Sanksi Siswa</h3>
+              <p class="text-xs text-slate-500 mt-0.5">Atur setelah berapa kali pelanggaran seorang siswa diberi sanksi, lalu pantau/perbarui status penanganan sanksi yang sudah terpicu.</p>
+            </div>
+            <button type="button" onclick="loadAturanSanksiAdmin(); loadRiwayatSanksiAdmin();" class="bg-white border px-3 py-2 rounded-xl text-xs font-bold hover:bg-slate-50">🔄 Refresh</button>
+          </div>
+
+          <div class="editor-only hidden space-y-2">
+            <h4 class="font-bold text-slate-700 text-xs uppercase">Tambah / Edit Aturan Sanksi</h4>
+            <form id="form-sanksi-aturan" onsubmit="simpanAturanSanksiAdmin(event)" class="grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <input type="hidden" id="sanksi-aturan-row-index">
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Nama Siswa</label>
+                <input id="sanksi-aturan-nama" type="text" required placeholder="Nama sesuai Data Siswa" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Kelas</label>
+                <input id="sanksi-aturan-kelas" type="text" placeholder="7A" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Setelah Berapa Kali Pelanggaran?</label>
+                <input id="sanksi-aturan-ambang" type="number" min="1" required value="3" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Jenis Sanksi</label>
+                <input id="sanksi-aturan-jenis" type="text" required placeholder="Contoh: Panggil orang tua" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div class="flex items-end gap-2">
+                <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold text-xs">Simpan</button>
+                <button type="button" onclick="resetFormAturanSanksi()" class="bg-slate-200 hover:bg-slate-300 text-slate-600 px-4 py-2.5 rounded-xl font-bold text-xs">Reset</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="max-h-72 overflow-y-auto custom-scroll">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-50 text-slate-500">
+                <tr>
+                  <th class="p-2">Nama Siswa</th>
+                  <th class="p-2">Kelas</th>
+                  <th class="p-2">Ambang</th>
+                  <th class="p-2">Jumlah Saat Ini</th>
+                  <th class="p-2">Jenis Sanksi</th>
+                  <th class="editor-only hidden p-2 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="sanksi-aturan-table-body" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+
+          <div class="border-t pt-4">
+            <h4 class="font-bold text-slate-700 text-xs uppercase mb-2">Riwayat Sanksi Terpicu</h4>
+            <div class="max-h-72 overflow-y-auto custom-scroll">
+              <table class="w-full text-xs text-left">
+                <thead class="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th class="p-2">Tanggal</th>
+                    <th class="p-2">Nama Siswa</th>
+                    <th class="p-2">Kelas</th>
+                    <th class="p-2">Jumlah</th>
+                    <th class="p-2">Jenis Sanksi</th>
+                    <th class="p-2">Status</th>
+                    <th class="editor-only hidden p-2 text-center">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="sanksi-riwayat-table-body" class="divide-y divide-slate-100"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel Kelola Tingkat & Poin — terlihat Admin & Superadmin.
+             Daftar tingkat (Ringan/Sedang/Berat untuk Pelanggaran, atau
+             Tingkat Sekolah/Kecamatan/dst untuk Prestasi) beserta poinnya.
+             Dipakai untuk mengisi dropdown "Tingkat" di form Input Data —
+             begitu pelapor memilih kategori Pelanggaran/Prestasi lalu
+             tingkatnya, poin di sini otomatis ikut tersimpan ke laporan. -->
+        <div id="panel-tingkat-poin" class="loggedin-only hidden bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+          <div class="flex items-center justify-between border-b pb-2">
+            <div>
+              <h3 class="font-bold text-slate-800">🏷️ Kelola Tingkat &amp; Poin</h3>
+              <p class="text-xs text-slate-500 mt-0.5">Atur pilihan tingkat (mis. Ringan/Sedang/Berat) beserta poinnya untuk kategori Pelanggaran &amp; Prestasi di form Input Data.</p>
+            </div>
+            <button type="button" onclick="loadTingkatPoinAdmin()" class="bg-white border px-3 py-2 rounded-xl text-xs font-bold hover:bg-slate-50">🔄 Refresh</button>
+          </div>
+
+          <div class="editor-only hidden space-y-2">
+            <h4 class="font-bold text-slate-700 text-xs uppercase">Tambah / Edit Tingkat</h4>
+            <form id="form-tingkat-poin" onsubmit="simpanTingkatPoinAdmin(event)" class="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <input type="hidden" id="tingkat-poin-row-index">
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Kategori</label>
+                <select id="tingkat-poin-kategori" required class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+                  <option value="">-- Pilih --</option>
+                  <option value="Pelanggaran">Pelanggaran</option>
+                  <option value="Prestasi">Prestasi</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Nama Tingkat</label>
+                <input id="tingkat-poin-nama" type="text" required placeholder="Contoh: Ringan, Sedang, Berat" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-500 mb-1">Poin</label>
+                <input id="tingkat-poin-nilai" type="number" min="0" required value="1" class="w-full p-2.5 bg-white border rounded-xl outline-none text-sm font-medium">
+              </div>
+              <div class="flex items-end gap-2">
+                <button type="submit" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold text-xs">Simpan</button>
+                <button type="button" onclick="resetFormTingkatPoin()" class="bg-slate-200 hover:bg-slate-300 text-slate-600 px-4 py-2.5 rounded-xl font-bold text-xs">Reset</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="max-h-72 overflow-y-auto custom-scroll">
+            <table class="w-full text-xs text-left">
+              <thead class="bg-slate-50 text-slate-500">
+                <tr>
+                  <th class="p-2">Kategori</th>
+                  <th class="p-2">Nama Tingkat</th>
+                  <th class="p-2">Poin</th>
+                  <th class="editor-only hidden p-2 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="tingkat-poin-table-body" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+
       </section>
 
       <!-- ===================== TAB LOG AKTIVITAS (AUDIT LOG) ===================== -->
@@ -855,7 +1066,7 @@
           <span class="spinner mb-2"></span>
           <p class="text-xs text-slate-500 font-semibold">Memuat gambar bukti...</p>
         </div>
-        
+
         <img id="lightbox-img" src="" alt="Foto Bukti" class="max-h-[60vh] max-w-full object-contain rounded-2xl shadow-md hidden"
              onload="document.getElementById('lightbox-loader').classList.add('hidden'); this.classList.remove('hidden');"
              onerror="document.getElementById('lightbox-loader').classList.add('hidden'); document.getElementById('lightbox-error').classList.remove('hidden');">
@@ -864,6 +1075,13 @@
           <div class="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto text-xl font-bold">⚠️</div>
           <p class="text-xs font-bold text-slate-700">Gambar tidak dapat dipratinjau langsung</p>
           <p class="text-[11px] text-slate-400 max-w-xs mx-auto">File mungkin berformat PDF atau memerlukan akses otorisasi Google Drive.</p>
+        </div>
+
+        <!-- Navigasi galeri — hanya tampil kalau laporan ini punya lebih dari satu foto bukti. -->
+        <div id="lightbox-nav" class="hidden">
+          <button type="button" onclick="lightboxFotoSebelumnya()" aria-label="Foto sebelumnya" class="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-slate-900/70 hover:bg-slate-900 text-white flex items-center justify-center text-lg font-bold shadow">‹</button>
+          <button type="button" onclick="lightboxFotoBerikutnya()" aria-label="Foto berikutnya" class="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-slate-900/70 hover:bg-slate-900 text-white flex items-center justify-center text-lg font-bold shadow">›</button>
+          <span id="lightbox-counter" class="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 px-2.5 py-1 rounded-full bg-slate-900/70 text-white text-[11px] font-bold"></span>
         </div>
       </div>
 
@@ -922,19 +1140,33 @@
           <div><label class="font-bold text-slate-500">Angkatan</label><input type="text" id="edit-angkatan" class="w-full p-2.5 border rounded-xl"></div>
         </div>
         <div><label class="font-bold text-slate-500">Kategori</label>
-          <select id="edit-kategori" class="w-full p-2.5 border rounded-xl">
+          <select id="edit-kategori" onchange="renderOpsiTingkatEdit()" class="w-full p-2.5 border rounded-xl">
             <option value="Pelanggaran">Pelanggaran</option>
             <option value="Kasus">Kasus</option>
             <option value="Prestasi">Prestasi</option>
             <option value="Konseling">Konseling</option>
           </select>
         </div>
+        <div id="edit-tingkat-poin-wrap" class="hidden grid grid-cols-2 gap-2">
+          <div>
+            <label class="font-bold text-slate-500">Tingkat</label>
+            <select id="edit-tingkat" onchange="updatePoinDisplayEdit()" class="w-full p-2.5 border rounded-xl">
+              <option value="">-- Pilih Tingkat --</option>
+            </select>
+          </div>
+          <div>
+            <label class="font-bold text-slate-500">Poin</label>
+            <div id="edit-poin-display" class="w-full p-2.5 bg-slate-100 border rounded-xl font-extrabold text-slate-700">-</div>
+          </div>
+        </div>
         <div><label class="font-bold text-slate-500">Kasus / Prestasi</label><input type="text" id="edit-kasus" class="w-full p-2.5 border rounded-xl"></div>
         <div><label class="font-bold text-slate-500">Tindakan</label><textarea id="edit-tindakan" rows="2" class="w-full p-2.5 border rounded-xl"></textarea></div>
         <div>
-          <label class="font-bold text-slate-500 block mb-1">Unggah / Ganti Foto Bukti Kejadian (Opsional)</label>
-          <input id="edit-foto" type="file" accept="image/*,.pdf" class="block w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-blue-50 file:text-blue-700 font-semibold">
+          <label class="font-bold text-slate-500 block mb-1">Unggah / Ganti Foto Bukti Kejadian (Opsional, maks. 10 foto)</label>
+          <p class="text-[10px] text-slate-400 mb-1">Kalau pilih foto baru di sini, SEMUA foto bukti lama akan diganti dengan foto baru ini.</p>
+          <input id="edit-foto" type="file" accept="image/*,.pdf" multiple onchange="handleEditFotoBuktiChange(this)" class="block w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-blue-50 file:text-blue-700 font-semibold">
           <span id="edit-foto-status" class="text-[11px] text-slate-400 mt-1 block"></span>
+          <div id="edit-preview-foto-bukti" class="flex flex-wrap gap-2 mt-2"></div>
         </div>
         <div>
           <label class="font-bold text-slate-500 block mb-1">Unggah / Ganti Foto Surat Pernyataan (Opsional)</label>
@@ -987,6 +1219,46 @@
       <div class="flex gap-2 pt-2">
         <button onclick="tutupConfirmModal(false)" class="flex-1 py-2.5 border rounded-xl font-bold text-xs">Batal</button>
         <button id="btn-confirm-action" class="flex-1 py-2.5 bg-red-600 text-white rounded-xl font-bold text-xs">Ya, Lanjutkan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Popup Tahap 1: ditampilkan ke pelapor SAAT MENYIMPAN laporan berkategori
+       "Pelanggaran" — tanya dulu apakah mau mengatur ambang sanksi untuk
+       siswa yang terlibat. -->
+  <div id="modal-sanksi-tanya" class="fixed inset-0 z-[260] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div class="bg-white w-full max-w-md rounded-3xl p-6 text-center space-y-4 animate-in">
+      <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto font-black text-xl">⚠</div>
+      <h3 class="font-extrabold text-slate-800 text-base">Atur Sanksi untuk Siswa Ini?</h3>
+      <p class="text-xs text-slate-500">Laporan ini dicatat sebagai <b>Pelanggaran</b>. Anda bisa mengatur setelah berapa kali pelanggaran siswa yang terlibat akan diberi sanksi otomatis, supaya penanganannya bisa disiapkan.</p>
+      <p id="sanksi-tanya-daftar-siswa" class="text-[11px] text-slate-400 italic"></p>
+      <div class="flex flex-col sm:flex-row gap-2 pt-2">
+        <button type="button" onclick="lanjutkanTanpaSanksi()" class="flex-1 py-2.5 border rounded-xl font-bold text-xs">Tidak, Lanjutkan Simpan</button>
+        <button type="button" onclick="bukaModalInputSanksi()" class="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs">Ya, Atur Sanksi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Popup Tahap 2: muncul kalau pelapor memilih "Ya, Atur Sanksi" — isi
+       setelah berapa kali pelanggaran & jenis sanksinya, berlaku untuk semua
+       siswa yang terlibat dalam laporan ini (bisa diedit lagi nanti per
+       siswa lewat panel "Aturan & Riwayat Sanksi" di tab Admin Siswa). -->
+  <div id="modal-sanksi-input" class="fixed inset-0 z-[260] hidden items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div class="bg-white w-full max-w-md rounded-3xl p-6 space-y-4 animate-in">
+      <h3 class="font-extrabold text-slate-800 text-base text-center">Atur Ambang Sanksi</h3>
+      <p class="text-xs text-slate-500 text-center">Berlaku untuk: <span id="sanksi-input-daftar-siswa" class="font-bold text-slate-700"></span></p>
+      <div>
+        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Sanksi diberikan setelah berapa kali pelanggaran?</label>
+        <input type="number" id="sanksi-input-ambang" min="1" value="3" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium">
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Jenis / Bentuk Sanksi</label>
+        <input type="text" id="sanksi-input-jenis" placeholder="Contoh: Panggil orang tua, Skorsing 1 hari..." class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none font-medium">
+      </div>
+      <p class="text-[11px] text-slate-400 italic">Setiap kali jumlah pelanggaran siswa ini mencapai kelipatan angka di atas, sistem otomatis mencatat sanksi berstatus "Belum Selesai" — statusnya bisa diubah jadi "Selesai" di tab Admin Siswa setelah ditangani.</p>
+      <div class="flex flex-col sm:flex-row gap-2 pt-2">
+        <button type="button" onclick="lanjutkanTanpaSanksi()" class="flex-1 py-2.5 border rounded-xl font-bold text-xs">Lewati</button>
+        <button type="button" id="btn-simpan-aturan-sanksi" onclick="simpanAturanLaluLanjutkan()" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs">Simpan Aturan &amp; Lanjutkan</button>
       </div>
     </div>
   </div>
@@ -1057,7 +1329,24 @@
                 hapusAkun: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Akun dihapus!' }); }, 300); },
                 getSuperadminPinStatus: function() { setTimeout(function(){ cb({ success: true, isSet: false }); }, 200); },
                 setSuperadminPin: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: PIN Superadmin disimpan!' }); }, 300); },
-                checkSessionValid: function() { setTimeout(function(){ cb({ valid: true, role: userRole }); }, 100); }
+                checkSessionValid: function() { setTimeout(function(){ cb({ valid: true, role: userRole }); }, 100); },
+                simpanAturanSanksi: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Aturan sanksi disimpan!' }); }, 300); },
+                getAturanSanksiList: function() { setTimeout(function(){ cb([
+                  { rowIndex: 2, nama: 'AMANDA NURY MAULIDA', kelas: '7A', angkatan: '2025/2026', ambang: 3, jenisSanksi: 'Panggil orang tua', diaturOleh: 'admin', tanggal: '', jumlahSaatIni: 1 }
+                ]); }, 200); },
+                hapusAturanSanksi: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Aturan sanksi dihapus!' }); }, 300); },
+                getRiwayatSanksiList: function() { setTimeout(function(){ cb([]); }, 200); },
+                updateStatusSanksi: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Status sanksi diperbarui!' }); }, 300); },
+                hapusRiwayatSanksi: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Riwayat sanksi dihapus!' }); }, 300); },
+                getDaftarTingkatPoin: function() { setTimeout(function(){ cb([
+                  { rowIndex: 2, kategori: 'Pelanggaran', tingkat: 'Ringan', poin: 1 },
+                  { rowIndex: 3, kategori: 'Pelanggaran', tingkat: 'Sedang', poin: 3 },
+                  { rowIndex: 4, kategori: 'Pelanggaran', tingkat: 'Berat', poin: 5 },
+                  { rowIndex: 5, kategori: 'Prestasi', tingkat: 'Tingkat Sekolah', poin: 3 },
+                  { rowIndex: 6, kategori: 'Prestasi', tingkat: 'Tingkat Nasional', poin: 15 }
+                ]); }, 200); },
+                simpanTingkatPoin: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Tingkat & poin disimpan!' }); }, 300); },
+                hapusTingkatPoin: function() { setTimeout(function(){ cb({ success: true, message: '✓ Mock: Tingkat & poin dihapus!' }); }, 300); }
               };
               return runner;
             }
@@ -1065,6 +1354,73 @@
         }
       };
     }
+
+    // ===================== OVERLAY LOADING GLOBAL (kontrol) =====================
+    // showGlobalLoading()/hideGlobalLoading() pakai counter supaya kalau ada
+    // beberapa request nyala bersamaan, overlay cuma hilang setelah SEMUA
+    // request selesai (tidak hilang duluan gara-gara salah satu selesai).
+    let _globalLoadingCount = 0;
+    function showGlobalLoading(pesan) {
+      _globalLoadingCount++;
+      const overlay = document.getElementById('global-loading-overlay');
+      const msgEl = document.getElementById('global-loading-msg');
+      if (msgEl) msgEl.textContent = pesan || 'Memproses...';
+      if (overlay) overlay.classList.add('show');
+    }
+    function hideGlobalLoading() {
+      _globalLoadingCount = Math.max(0, _globalLoadingCount - 1);
+      if (_globalLoadingCount === 0) {
+        const overlay = document.getElementById('global-loading-overlay');
+        if (overlay) overlay.classList.remove('show');
+      }
+    }
+
+    // Nama fungsi server yang dipanggil OTOMATIS di latar belakang (polling
+    // status tiap 15 detik, cek validitas sesi) — sengaja TIDAK menampilkan
+    // overlay supaya layar tidak berkedip-kedip sendiri tiap beberapa detik.
+    // Semua pemanggilan lain (simpan, hapus, edit, ambil data awal, dll)
+    // otomatis menampilkan overlay loading tanpa perlu diubah satu-satu.
+    const SILENT_SERVER_CALLS = ['getAdminEditStatus', 'checkSessionValid'];
+
+    // Membungkus google.script.run supaya SETIAP pemanggilan ke server
+    // (di seluruh bagian kode manapun, tanpa perlu diubah satu-satu)
+    // otomatis menampilkan overlay loading saat mulai & menyembunyikannya
+    // lagi begitu server merespons (baik berhasil maupun gagal).
+    (function bungkusGoogleScriptRun() {
+      const nativeRun = google.script.run;
+
+      function buatProxy(successCb, failureCb) {
+        return new Proxy({}, {
+          get: function(target, prop) {
+            if (prop === 'withSuccessHandler') {
+              return function(cb) { return buatProxy(cb, failureCb); };
+            }
+            if (prop === 'withFailureHandler') {
+              return function(cb) { return buatProxy(successCb, cb); };
+            }
+            // Selain dua di atas berarti ini nama fungsi server yang benar-benar
+            // dipanggil (titik akhir rantai) — mis. .simpanData(), .hapusData(), dst.
+            return function() {
+              const args = Array.prototype.slice.call(arguments);
+              const diam = SILENT_SERVER_CALLS.indexOf(prop) !== -1;
+              if (!diam) showGlobalLoading();
+
+              let chain = nativeRun.withSuccessHandler(function(res) {
+                if (!diam) hideGlobalLoading();
+                if (typeof successCb === 'function') successCb(res);
+              });
+              chain = chain.withFailureHandler(function(err) {
+                if (!diam) hideGlobalLoading();
+                if (typeof failureCb === 'function') failureCb(err);
+              });
+              return chain[prop].apply(chain, args);
+            };
+          }
+        });
+      }
+
+      google.script.run = buatProxy(null, null);
+    })();
 
     // STATE GLOBAL
     let rawData = [];
@@ -1080,6 +1436,11 @@
     let userRole = 'user'; // 'user' (pengunjung, input+lihat saja) | 'admin' (+cetak) | 'superadmin' (full CRUD)
     let sessionToken = ''; // token sesi dari server (CacheService), dikirim di setiap aksi CRUD
     let confirmCallback = null;
+    let pendingFormData = null; // data form Input Data yang sedang menunggu popup "Atur Sanksi" (kategori Pelanggaran)
+    let pendingFormFiles = []; // daftar file foto bukti kejadian (maks 10) terkait pendingFormData
+    let daftarAturanSanksi = [];
+    let daftarRiwayatSanksi = [];
+    let daftarTingkatPoin = []; // {rowIndex, kategori, tingkat, poin} — dipakai dropdown "Tingkat" di form Input Data & panel admin
 
     // ===================== PERSIST SESI LOGIN (biar tidak login ulang tiap refresh) =====================
     // Token sesi TETAP divalidasi ke server (CacheService, lihat checkSessionValid)
@@ -1615,6 +1976,12 @@
       if (typeof renderAdminData === 'function' && document.getElementById('admin-table-body') && Array.isArray(dataSiswaAdmin) && dataSiswaAdmin.length) {
         renderAdminData();
       }
+      if (typeof renderAturanSanksiTable === 'function' && document.getElementById('sanksi-aturan-table-body')) {
+        renderAturanSanksiTable();
+      }
+      if (typeof renderRiwayatSanksiTable === 'function' && document.getElementById('sanksi-riwayat-table-body')) {
+        renderRiwayatSanksiTable();
+      }
 
       // Muat/kosongkan kartu ringkasan dashboard di tab Input Data sesuai status login
       if (isLoggedIn) {
@@ -1708,7 +2075,55 @@
         updateListSiswa();
       }).getDaftarSiswa();
 
+      loadTingkatPoinOptions();
       refreshWaNotifStatus();
+    }
+
+    // ===================== TINGKAT & POIN (Form Input Data) =====================
+    function loadTingkatPoinOptions() {
+      google.script.run.withSuccessHandler(function(data) {
+        daftarTingkatPoin = Array.isArray(data) ? data : [];
+        renderOpsiTingkat();
+      }).getDaftarTingkatPoin();
+    }
+
+    // Tampilkan field Tingkat & Poin hanya untuk kategori Pelanggaran/Prestasi,
+    // dan isi dropdown Tingkat sesuai kategori yang sedang dipilih.
+    function renderOpsiTingkat() {
+      const kategori = document.getElementById('kategori').value;
+      const wrap = document.getElementById('tingkat-poin-wrap');
+      const select = document.getElementById('tingkat');
+
+      if (kategori !== 'Pelanggaran' && kategori !== 'Prestasi') {
+        wrap.classList.add('hidden');
+        select.innerHTML = '<option value="">-- Pilih Tingkat --</option>';
+        select.value = '';
+        updatePoinDisplay();
+        return;
+      }
+
+      wrap.classList.remove('hidden');
+      const opsi = daftarTingkatPoin.filter(function(t) { return t.kategori === kategori; });
+      let html = '<option value="">-- Pilih Tingkat --</option>';
+      opsi.forEach(function(t) {
+        html += '<option value="' + t.tingkat + '" data-poin="' + t.poin + '">' + t.tingkat + ' (' + t.poin + ' poin)</option>';
+      });
+      select.innerHTML = html;
+      if (opsi.length === 0) {
+        select.innerHTML = '<option value="">Belum ada tingkat diatur untuk ' + kategori + '</option>';
+      }
+      updatePoinDisplay();
+    }
+
+    // Update kotak "Poin" (read-only) sesuai tingkat yang dipilih — nilai ini
+    // cuma untuk ditampilkan ke pelapor, poin yang benar-benar tersimpan
+    // selalu dihitung ulang di server (lihat _cariPoinTingkat di Kode.gs).
+    function updatePoinDisplay() {
+      const select = document.getElementById('tingkat');
+      const display = document.getElementById('poin-display');
+      const opt = select.options[select.selectedIndex];
+      const poin = opt && opt.dataset ? opt.dataset.poin : null;
+      display.textContent = (select.value && poin !== undefined && poin !== null) ? poin + ' poin' : '-';
     }
 
     function loadAngkatanOptions() {
@@ -1833,7 +2248,7 @@
 
       if (tab === 'rekap') loadData();
       if (tab === 'grafik') loadDataForGrafik();
-      if (tab === 'admin') { loadAdminData(); loadWaliKelasAdminData(); loadAkunAdminData(); loadPinStatus(); }
+      if (tab === 'admin') { loadAdminData(); loadWaliKelasAdminData(); loadAkunAdminData(); loadPinStatus(); loadAturanSanksiAdmin(); loadRiwayatSanksiAdmin(); loadTingkatPoinAdmin(); }
       if (tab === 'log') loadAuditLog();
       if (tab === 'input' && isLoggedIn) loadDashboardStats();
     }
@@ -2037,42 +2452,127 @@
         return;
       }
 
-      const btnText = document.getElementById('btnSubmitText');
-      btnText.textContent = 'Menyimpan...';
-
-      const fileInput = document.getElementById('foto');
-      const file = fileInput.files && fileInput.files[0];
-
-      const data = {
+      pendingFormData = {
         tglKejadian: document.getElementById('tglKejadian').value,
         kategori: document.getElementById('kategori').value,
         kasus: document.getElementById('kasus').value,
         tindakan: document.getElementById('tindakan').value,
+        tingkat: (document.getElementById('tingkat') || {}).value || '',
         dicatatOleh: (document.getElementById('dicatatOleh') || {}).value || '',
         kirimNotifikasiWA: document.getElementById('kirimNotifikasiWA').checked,
         deviceInfo: deviceInfo,
-        fileName: file ? file.name : '',
-        fileData: null,
+        filesData: null,
         daftarSiswa: []
       };
+      pendingFormFiles = fotoBuktiFiles.slice(); // snapshot: aman kalau array berubah selagi popup sanksi tampil
+
+      // Kategori "Pelanggaran": tanya dulu ke pelapor apakah mau mengatur
+      // ambang sanksi untuk siswa yang terlibat, sebelum benar-benar disimpan.
+      if (pendingFormData.kategori === 'Pelanggaran') {
+        const namaSiswaList = siswaTerpilihFinal.map(function(s) { return s.nama; }).join(', ');
+        document.getElementById('sanksi-tanya-daftar-siswa').textContent = 'Siswa terlibat: ' + namaSiswaList;
+        document.getElementById('modal-sanksi-tanya').classList.remove('hidden');
+        document.getElementById('modal-sanksi-tanya').classList.add('flex');
+        return;
+      }
+
+      _prosesSimpanData();
+    }
+
+    // Ditutup popup sanksi (baik ditolak, dilewati, atau setelah aturan
+    // tersimpan) lalu lanjut menyimpan laporan seperti biasa.
+    function lanjutkanTanpaSanksi() {
+      document.getElementById('modal-sanksi-tanya').classList.add('hidden');
+      document.getElementById('modal-sanksi-tanya').classList.remove('flex');
+      document.getElementById('modal-sanksi-input').classList.add('hidden');
+      document.getElementById('modal-sanksi-input').classList.remove('flex');
+      _prosesSimpanData();
+    }
+
+    function bukaModalInputSanksi() {
+      document.getElementById('modal-sanksi-tanya').classList.add('hidden');
+      document.getElementById('modal-sanksi-tanya').classList.remove('flex');
+
+      const namaSiswaList = siswaTerpilihFinal.map(function(s) { return s.nama; }).join(', ');
+      document.getElementById('sanksi-input-daftar-siswa').textContent = namaSiswaList;
+      document.getElementById('sanksi-input-ambang').value = 3;
+      document.getElementById('sanksi-input-jenis').value = '';
+
+      document.getElementById('modal-sanksi-input').classList.remove('hidden');
+      document.getElementById('modal-sanksi-input').classList.add('flex');
+    }
+
+    function _simpanAturanSanksiPromise(payload) {
+      return new Promise(function(resolve) {
+        google.script.run.withSuccessHandler(function(res) { resolve(res); })
+          .withFailureHandler(function(err) { resolve({ success: false, message: err && err.message }); })
+          .simpanAturanSanksi(sessionToken, payload);
+      });
+    }
+
+    // Simpan aturan sanksi (ambang + jenis sanksi yang sama) untuk SETIAP
+    // siswa dalam daftar final laporan ini, lalu lanjut menyimpan laporannya.
+    function simpanAturanLaluLanjutkan() {
+      const ambang = parseInt(document.getElementById('sanksi-input-ambang').value, 10);
+      const jenis = document.getElementById('sanksi-input-jenis').value.trim();
+
+      if (!ambang || ambang < 1) return showToast('Isi jumlah pelanggaran (ambang) dengan angka lebih dari 0!', 'error');
+      if (!jenis) return showToast('Isi jenis/bentuk sanksi terlebih dahulu!', 'error');
+
+      const btnSimpanAturan = document.getElementById('btn-simpan-aturan-sanksi');
+      if (btnSimpanAturan) btnSimpanAturan.disabled = true;
+
+      const promises = siswaTerpilihFinal.map(function(item) {
+        return _simpanAturanSanksiPromise({
+          nama: item.nama, kelas: item.kelas, angkatan: item.angkatan,
+          ambangPelanggaran: ambang, jenisSanksi: jenis
+        });
+      });
+
+      Promise.all(promises).then(function() {
+        if (btnSimpanAturan) btnSimpanAturan.disabled = false;
+        document.getElementById('modal-sanksi-input').classList.add('hidden');
+        document.getElementById('modal-sanksi-input').classList.remove('flex');
+        _prosesSimpanData();
+      });
+    }
+
+    // Proses sebenarnya menyimpan laporan (baca/kompres foto -> kirim ke
+    // server) — dipanggil setelah popup "Atur Sanksi" selesai (dilewati,
+    // ditolak, atau aturannya sudah disimpan), atau langsung untuk kategori
+    // selain "Pelanggaran".
+    function _prosesSimpanData() {
+      const data = pendingFormData;
+      const files = pendingFormFiles;
+
+      const btnText = document.getElementById('btnSubmitText');
+      btnText.textContent = 'Menyimpan...';
 
       const resetForm = function() {
         document.getElementById('formBK').reset();
         siswaTerpilihFinal = [];
         suratFilesPerSiswa = {};
+        fotoBuktiFiles = [];
+        renderFotoBuktiPreview();
         document.getElementById('daftar-final').innerHTML = '<p id="pesan-kosong" class="text-xs text-slate-400 italic">Belum ada siswa ditambahkan</p>';
         document.getElementById('tglKejadian').valueAsDate = new Date();
         document.getElementById('file-name-display').textContent = '';
         document.getElementById('suratPernyataan').value = 'Tidak';
         document.getElementById('kirimNotifikasiWA').checked = false;
         toggleFotoSurat();
+        renderOpsiTingkat();
         updateListSiswa();
       };
 
-      // Baca foto bukti kejadian (shared, satu untuk seluruh laporan ini) +
-      // foto surat pernyataan tiap siswa (individual, hanya untuk siswa yang diunggahkan filenya).
-      // Semua gambar dikompres dulu supaya payload tidak terlalu besar saat banyak foto dikirim sekaligus.
-      const bacaFotoBukti = file ? _kompresGambarJadiDataUrl(file, 1600, 0.75) : Promise.resolve(null);
+      // Baca & kompres SEMUA foto bukti kejadian (shared, dipakai bersama untuk
+      // seluruh baris laporan ini) + foto surat pernyataan tiap siswa (individual,
+      // hanya untuk siswa yang diunggahkan filenya). Semua gambar dikompres dulu
+      // supaya payload tidak terlalu besar saat banyak foto dikirim sekaligus.
+      const bacaSemuaFotoBukti = Promise.all(files.map(function(f) {
+        return _kompresGambarJadiDataUrl(f, 1600, 0.75).then(function(dataUrl) {
+          return { fileName: f.name, fileData: dataUrl };
+        });
+      }));
       const bacaSemuaSurat = Promise.all(siswaTerpilihFinal.map(function(item) {
         const fileSurat = suratFilesPerSiswa[item.id];
         if (!fileSurat) {
@@ -2083,8 +2583,8 @@
         });
       }));
 
-      Promise.all([bacaFotoBukti, bacaSemuaSurat]).then(function(results) {
-        data.fileData = results[0];
+      Promise.all([bacaSemuaFotoBukti, bacaSemuaSurat]).then(function(results) {
+        data.filesData = results[0];
         data.daftarSiswa = results[1];
 
         // Safety-net: kalau server tidak merespons sama sekali dalam 90 detik (payload
@@ -2115,6 +2615,21 @@
         showToast(err.message || 'Gagal membaca/mengompres file.', 'error');
         btnText.textContent = 'SIMPAN DATA LAPORAN';
       });
+    }
+
+    // Diklik dari badge "sanksi belum ditangani" di Dashboard Ringkasan —
+    // pindah ke tab Admin Siswa lalu scroll & sorot panel Aturan & Riwayat
+    // Sanksi, supaya admin langsung sampai ke daftar yang perlu ditindaklanjuti.
+    function lompatKeRiwayatSanksi() {
+      showTab('admin');
+      loadRiwayatSanksiAdmin();
+      setTimeout(function() {
+        const panel = document.getElementById('panel-aturan-riwayat-sanksi');
+        if (!panel) return;
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        panel.classList.add('ring-2', 'ring-amber-400');
+        setTimeout(function() { panel.classList.remove('ring-2', 'ring-amber-400'); }, 2000);
+      }, 150);
     }
 
     // ===================== DASHBOARD RINGKASAN (Tab Input Data) =====================
@@ -2153,6 +2668,22 @@
         } else {
           siswaPresEl.textContent = '-';
           siswaPresSubEl.textContent = 'Belum ada data prestasi';
+        }
+
+        // Badge sanksi belum ditangani — cuma tampil kalau jumlahnya > 0.
+        const bannerEl = document.getElementById('dash-sanksi-pending-banner');
+        const jumlahPending = Number(stats.sanksiBelumSelesaiJumlah) || 0;
+        if (jumlahPending > 0) {
+          document.getElementById('dash-sanksi-pending-jumlah').textContent = jumlahPending;
+          const namaList = Array.isArray(stats.sanksiBelumSelesaiNama) ? stats.sanksiBelumSelesaiNama : [];
+          let sub = namaList.join(', ');
+          if (jumlahPending > namaList.length) sub += ', dan lainnya';
+          document.getElementById('dash-sanksi-pending-sub').textContent = sub || 'Klik untuk lihat detail';
+          bannerEl.classList.remove('hidden');
+          bannerEl.classList.add('flex');
+        } else {
+          bannerEl.classList.add('hidden');
+          bannerEl.classList.remove('flex');
         }
       }).withFailureHandler(function(err) {
         console.warn('Gagal memuat dashboard:', err);
@@ -2204,7 +2735,7 @@
       updateSelectedLaporanCount();
 
       if (!rawData || rawData.length <= 1) {
-        tbody.innerHTML = '<tr><td colspan="9" class="p-6 text-center text-slate-400 italic">Belum ada data...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="p-6 text-center text-slate-400 italic">Belum ada data...</td></tr>';
         mobileList.innerHTML = '<div class="bg-white rounded-2xl border border-slate-200 p-6 text-center text-slate-400 italic text-sm">Belum ada data...</div>';
         return;
       }
@@ -2224,6 +2755,8 @@
         const kategori = String(row[5] || '-');
         const kasus = String(row[6] || '');
         const tindakan = String(row[7] || '');
+        const tingkat = row.length >= 11 ? String(row[10] || '').trim() : '';
+        const poin = row.length >= 12 ? (Number(row[11]) || 0) : 0;
         let urlBukti = '-';
         let urlSurat = '-';
         const namaEsc = escJs(nama);
@@ -2263,7 +2796,9 @@
         let buktiHtml = '<span class="text-slate-300">-</span>';
         let buktiHtmlMobile = '<span class="text-xs text-slate-300">Tidak ada bukti</span>';
         if (hasUrl) {
-          buktiHtml = '<button type="button" onclick="bukaLightbox(\'' + urlBukti + '\', \'' + namaEsc + '\')" class="px-2.5 py-1 bg-blue-50 text-blue-600 rounded-lg font-bold hover:bg-blue-100 transition inline-flex items-center gap-1 text-[11px]">📷 Foto</button>';
+          const jumlahFotoBukti = _pisahUrlFoto(urlBukti).length;
+          const labelBukti = jumlahFotoBukti > 1 ? ('📷 ' + jumlahFotoBukti + ' Foto') : '📷 Foto';
+          buktiHtml = '<button type="button" onclick="bukaLightbox(\'' + urlBukti + '\', \'' + namaEsc + '\')" class="px-2.5 py-1 bg-blue-50 text-blue-600 rounded-lg font-bold hover:bg-blue-100 transition inline-flex items-center gap-1 text-[11px]">' + labelBukti + '</button>';
           buktiHtmlMobile = buktiHtml;
         } else if (isError) {
           buktiHtml = '<span class="text-[11px] text-rose-500 font-bold bg-rose-50 px-2 py-1 rounded-lg border border-rose-200 cursor-help" title="' + urlBukti + '">⚠️ Gagal Upload</span>';
@@ -2289,6 +2824,10 @@
             '<button onclick="konfirmasiHapusData(' + i + ')" class="p-1 bg-red-50 text-red-600 rounded">Hapus</button>'
           : '<span class="text-slate-300 text-[11px]">👁 Lihat saja</span>';
 
+        const poinHtml = tingkat
+          ? '<span class="px-2 py-1 bg-amber-50 text-amber-700 rounded-md font-bold text-[11px]" title="Tingkat: ' + tingkat + '">' + poin + '</span>'
+          : '<span class="text-slate-300">-</span>';
+
         const tr = '<tr class="hover:bg-slate-50 transition-colors">' +
           checkboxCellHtml +
           '<td class="p-3 whitespace-nowrap">' + tglIndo + '</td>' +
@@ -2296,6 +2835,7 @@
           '<td class="p-3 font-semibold text-slate-500">' + angkatan + '</td>' +
           '<td class="p-3 font-bold">' + kelas + '</td>' +
           '<td class="p-3"><span class="px-2 py-1 bg-slate-100 rounded-md font-bold">' + kategori + '</span></td>' +
+          '<td class="p-3 text-center">' + poinHtml + '</td>' +
           '<td class="p-3">' + kasus + '</td>' +
           '<td class="p-3 italic text-slate-600">' + tindakan + '</td>' +
           '<td class="p-3 text-center"><div class="flex flex-col items-center gap-1">' + buktiHtml + suratHtml + '</div></td>' +
@@ -2318,6 +2858,10 @@
           ? '<input type="checkbox" class="laporan-row-checkbox w-4 h-4 accent-blue-600" value="' + i + '" onchange="updateSelectedLaporanCount()">'
           : '';
 
+        const tingkatPoinCardHtml = tingkat
+          ? '<span class="px-2 py-1 bg-amber-50 text-amber-700 rounded-md text-[11px] font-bold">' + tingkat + ' &middot; ' + poin + ' poin</span>'
+          : '';
+
         const card =
           '<div class="bg-white rounded-2xl border border-slate-200 p-4 space-y-2.5 shadow-sm">' +
             '<div class="flex items-center justify-between">' +
@@ -2325,7 +2869,10 @@
                 checkboxCardHtml +
                 '<span class="text-[11px] font-semibold text-slate-400">' + tglIndo + '</span>' +
               '</div>' +
-              '<span class="px-2 py-1 rounded-md text-[11px] font-bold ' + kategoriBadgeClass + '">' + kategori + '</span>' +
+              '<div class="flex items-center gap-1.5">' +
+                tingkatPoinCardHtml +
+                '<span class="px-2 py-1 rounded-md text-[11px] font-bold ' + kategoriBadgeClass + '">' + kategori + '</span>' +
+              '</div>' +
             '</div>' +
             '<div class="text-sm font-extrabold uppercase text-blue-700 leading-snug cursor-pointer hover:underline" onclick="bukaRiwayatSiswa(\'' + namaEsc + '\')">' + nama + '</div>' +
             '<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 font-semibold">' +
@@ -2340,7 +2887,7 @@
         cardsHtml.push(card);
       }
 
-      tbody.innerHTML = rowsHtml.length ? rowsHtml.join('') : '<tr><td colspan="9" class="p-6 text-center text-slate-400 italic">Data tidak ditemukan</td></tr>';
+      tbody.innerHTML = rowsHtml.length ? rowsHtml.join('') : '<tr><td colspan="11" class="p-6 text-center text-slate-400 italic">Data tidak ditemukan</td></tr>';
       mobileList.innerHTML = cardsHtml.length ? cardsHtml.join('') : '<div class="bg-white rounded-2xl border border-slate-200 p-6 text-center text-slate-400 italic text-sm">Data tidak ditemukan</div>';
     }
 
@@ -2547,9 +3094,48 @@
       }
     }
 
-    function bukaLightbox(url, namaSiswa) {
-      document.getElementById('lightbox-title').textContent = 'Bukti: ' + namaSiswa;
+    // Memisahkan string URL Bukti yang mungkin berisi lebih dari satu foto
+    // (digabung dengan " | ", lihat _gabungUrlFoto di server) menjadi array
+    // URL yang valid saja. Aman dipanggil dengan string kosong / single URL
+    // lama (data sebelum fitur multi-foto) — tetap menghasilkan array 1 item.
+    function _pisahUrlFoto(urlGabungan) {
+      if (!urlGabungan) return [];
+      return String(urlGabungan).split('|').map(function(u) { return u.trim(); }).filter(function(u) {
+        return u && u !== '-' && (u.startsWith('http://') || u.startsWith('https://'));
+      });
+    }
+
+    let lightboxUrls = [];
+    let lightboxIndex = 0;
+    let lightboxNamaSiswa = '';
+
+    function bukaLightbox(urlGabungan, namaSiswa) {
+      lightboxUrls = _pisahUrlFoto(urlGabungan);
+      lightboxIndex = 0;
+      lightboxNamaSiswa = namaSiswa;
+      if (lightboxUrls.length === 0) return;
+
+      _tampilkanFotoLightboxSaatIni();
+
+      const modal = document.getElementById('modal-lightbox');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    function _tampilkanFotoLightboxSaatIni() {
+      const url = lightboxUrls[lightboxIndex];
+      const total = lightboxUrls.length;
+
+      document.getElementById('lightbox-title').textContent = 'Bukti: ' + lightboxNamaSiswa;
+      document.getElementById('lightbox-sub').textContent = total > 1
+        ? ('Foto ' + (lightboxIndex + 1) + ' dari ' + total)
+        : 'Bukti dokumentasi kejadian siswa';
       document.getElementById('lightbox-direct-btn').href = url;
+
+      const nav = document.getElementById('lightbox-nav');
+      if (nav) nav.classList.toggle('hidden', total <= 1);
+      const counter = document.getElementById('lightbox-counter');
+      if (counter) counter.textContent = (lightboxIndex + 1) + ' / ' + total;
 
       const loader = document.getElementById('lightbox-loader');
       const img = document.getElementById('lightbox-img');
@@ -2565,10 +3151,18 @@
       } else {
         img.src = url;
       }
+    }
 
-      const modal = document.getElementById('modal-lightbox');
-      modal.classList.remove('hidden');
-      modal.classList.add('flex');
+    function lightboxFotoBerikutnya() {
+      if (lightboxUrls.length <= 1) return;
+      lightboxIndex = (lightboxIndex + 1) % lightboxUrls.length;
+      _tampilkanFotoLightboxSaatIni();
+    }
+
+    function lightboxFotoSebelumnya() {
+      if (lightboxUrls.length <= 1) return;
+      lightboxIndex = (lightboxIndex - 1 + lightboxUrls.length) % lightboxUrls.length;
+      _tampilkanFotoLightboxSaatIni();
     }
 
     function tutupLightbox() {
@@ -2576,6 +3170,8 @@
       modal.classList.add('hidden');
       modal.classList.remove('flex');
       document.getElementById('lightbox-img').src = '';
+      lightboxUrls = [];
+      lightboxIndex = 0;
     }
 
     function bukaRiwayatSiswa(nama) {
@@ -2647,7 +3243,7 @@
           const namaEscRiw = escJs(namaAsli);
 
           const linkHtml =
-            (hasUrl ? '<button type="button" onclick="bukaLightbox(\'' + r.urlBukti + '\', \'' + namaEscRiw + '\')" class="px-2 py-1 bg-blue-50 text-blue-600 rounded-lg font-bold text-[10px]">📷 Foto</button>' : '') +
+            (hasUrl ? '<button type="button" onclick="bukaLightbox(\'' + r.urlBukti + '\', \'' + namaEscRiw + '\')" class="px-2 py-1 bg-blue-50 text-blue-600 rounded-lg font-bold text-[10px]">' + (_pisahUrlFoto(r.urlBukti).length > 1 ? ('📷 ' + _pisahUrlFoto(r.urlBukti).length + ' Foto') : '📷 Foto') + '</button>' : '') +
             (hasUrlSurat ? '<button type="button" onclick="bukaLightbox(\'' + r.urlSurat + '\', \'' + namaEscRiw + ' - Surat Pernyataan\')" class="px-2 py-1 bg-amber-50 text-amber-700 rounded-lg font-bold text-[10px]">📄 Surat</button>' : '');
 
           return '<div class="relative pl-4 border-l-2 border-slate-100">' +
@@ -2686,6 +3282,7 @@
       document.getElementById('edit-kategori').value = row[5] || 'Pelanggaran';
       document.getElementById('edit-kasus').value = row[6] || '';
       document.getElementById('edit-tindakan').value = row[7] || '';
+      renderOpsiTingkatEdit(row.length >= 11 ? String(row[10] || '').trim() : '');
 
       // Deteksi baris lain dengan Timestamp persis sama = kejadian yang diinput
       // bersamaan lewat "Pilih Siswa Terlibat" di halaman Input Data.
@@ -2712,12 +3309,15 @@
       
       const fotoStatus = document.getElementById('edit-foto-status');
       const currentBukti = row.length >= 9 ? row[8] : row[7];
-      if (currentBukti && currentBukti !== '-' && (currentBukti.startsWith('http://') || currentBukti.startsWith('https://'))) {
-        fotoStatus.textContent = '✓ Foto bukti saat ini tersimpan.';
+      const daftarBuktiSaatIni = _pisahUrlFoto(currentBukti);
+      if (daftarBuktiSaatIni.length > 0) {
+        fotoStatus.textContent = '✓ ' + daftarBuktiSaatIni.length + ' foto bukti saat ini tersimpan.';
       } else {
         fotoStatus.textContent = 'Belum ada foto bukti.';
       }
       document.getElementById('edit-foto').value = '';
+      editFotoBuktiFiles = [];
+      renderEditFotoBuktiPreview();
 
       const fotoSuratStatus = document.getElementById('edit-foto-surat-status');
       const currentSurat = row.length >= 10 ? row[9] : '';
@@ -2737,10 +3337,43 @@
       document.getElementById('modal-edit').classList.remove('flex');
     }
 
+    // Sama seperti renderOpsiTingkat() di form Input Data, tapi untuk modal
+    // Edit — bisa dipanggil dengan nilai tingkat yang sudah tersimpan
+    // (nilaiSaatIni) supaya langsung terpilih saat modal dibuka.
+    function renderOpsiTingkatEdit(nilaiSaatIni) {
+      const kategori = document.getElementById('edit-kategori').value;
+      const wrap = document.getElementById('edit-tingkat-poin-wrap');
+      const select = document.getElementById('edit-tingkat');
+
+      if (kategori !== 'Pelanggaran' && kategori !== 'Prestasi') {
+        wrap.classList.add('hidden');
+        select.innerHTML = '<option value="">-- Pilih Tingkat --</option>';
+        select.value = '';
+        updatePoinDisplayEdit();
+        return;
+      }
+
+      wrap.classList.remove('hidden');
+      const opsi = daftarTingkatPoin.filter(function(t) { return t.kategori === kategori; });
+      let html = '<option value="">-- Pilih Tingkat --</option>';
+      opsi.forEach(function(t) {
+        html += '<option value="' + t.tingkat + '" data-poin="' + t.poin + '">' + t.tingkat + ' (' + t.poin + ' poin)</option>';
+      });
+      select.innerHTML = html || '<option value="">Belum ada tingkat diatur untuk ' + kategori + '</option>';
+      if (nilaiSaatIni) select.value = nilaiSaatIni;
+      updatePoinDisplayEdit();
+    }
+
+    function updatePoinDisplayEdit() {
+      const select = document.getElementById('edit-tingkat');
+      const display = document.getElementById('edit-poin-display');
+      const opt = select.options[select.selectedIndex];
+      const poin = opt && opt.dataset ? opt.dataset.poin : null;
+      display.textContent = (select.value && poin !== undefined && poin !== null) ? poin + ' poin' : '-';
+    }
+
     function simpanEdit() {
       const i = document.getElementById('edit-row-index').value;
-      const fileInput = document.getElementById('edit-foto');
-      const file = fileInput.files && fileInput.files[0];
       const fileSuratInput = document.getElementById('edit-foto-surat');
       const fileSurat = fileSuratInput.files && fileSuratInput.files[0];
       const btnSubmit = document.getElementById('btn-edit-submit');
@@ -2754,8 +3387,8 @@
         kategori: document.getElementById('edit-kategori').value,
         kasus: document.getElementById('edit-kasus').value,
         tindakan: document.getElementById('edit-tindakan').value,
-        fileName: file ? file.name : '',
-        fileData: null,
+        tingkat: (document.getElementById('edit-tingkat') || {}).value || '',
+        filesData: null,
         suratFileName: fileSurat ? fileSurat.name : '',
         suratFileData: null
       };
@@ -2793,17 +3426,19 @@
         }).editData(sessionToken, payload);
       };
 
-      const bacaFotoBukti = function(next) {
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = function(evt) {
-            dataEdit.fileData = evt.target.result;
-            next();
-          };
-          reader.readAsDataURL(file);
-        } else {
+      const bacaSemuaFotoBukti = function(next) {
+        if (editFotoBuktiFiles.length === 0) { next(); return; }
+        Promise.all(editFotoBuktiFiles.map(function(f) {
+          return _kompresGambarJadiDataUrl(f, 1600, 0.75).then(function(dataUrl) {
+            return { fileName: f.name, fileData: dataUrl };
+          });
+        })).then(function(hasil) {
+          dataEdit.filesData = hasil;
           next();
-        }
+        }).catch(function(err) {
+          showToast(err.message || 'Gagal membaca/mengompres foto bukti.', 'error');
+          btnSubmit.textContent = 'Simpan';
+        });
       };
 
       const bacaFotoSurat = function(next) {
@@ -2819,7 +3454,7 @@
         }
       };
 
-      bacaFotoBukti(function() {
+      bacaSemuaFotoBukti(function() {
         bacaFotoSurat(function() {
           kirimDataEdit(dataEdit);
         });
@@ -3514,6 +4149,232 @@
       }).setSuperadminPin(sessionToken, pinLama, pinBaru);
     }
 
+    // ===================== ATURAN & RIWAYAT SANKSI (Tab Admin Siswa) =====================
+    function loadAturanSanksiAdmin() {
+      google.script.run.withSuccessHandler(function(data) {
+        daftarAturanSanksi = Array.isArray(data) ? data : [];
+        renderAturanSanksiTable();
+      }).getAturanSanksiList(sessionToken);
+    }
+
+    function renderAturanSanksiTable() {
+      const tbody = document.getElementById('sanksi-aturan-table-body');
+      if (!tbody) return;
+      const isEditor = isEditorRole();
+
+      if (daftarAturanSanksi.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="p-3 text-center text-slate-400 italic">Belum ada aturan sanksi.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = daftarAturanSanksi.map(function(a) {
+        const melebihi = a.jumlahSaatIni >= a.ambang;
+        return '<tr>' +
+          '<td class="p-2 font-semibold">' + a.nama + '</td>' +
+          '<td class="p-2">' + (a.kelas || '-') + '</td>' +
+          '<td class="p-2">' + a.ambang + 'x</td>' +
+          '<td class="p-2"><span class="px-2 py-0.5 rounded-md text-[10px] font-bold ' + (melebihi ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-700') + '">' + a.jumlahSaatIni + 'x</span></td>' +
+          '<td class="p-2">' + a.jenisSanksi + '</td>' +
+          '<td class="editor-only ' + (isEditor ? '' : 'hidden') + ' p-2 text-center whitespace-nowrap">' +
+            '<button type="button" onclick="editAturanSanksi(' + a.rowIndex + ')" class="text-blue-600 font-bold text-[11px] mr-2">Edit</button>' +
+            '<button type="button" onclick="konfirmasiHapusAturanSanksi(' + a.rowIndex + ')" class="text-red-600 font-bold text-[11px]">Hapus</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function editAturanSanksi(rowIndex) {
+      const item = daftarAturanSanksi.find(function(a) { return a.rowIndex === rowIndex; });
+      if (!item) return;
+      document.getElementById('sanksi-aturan-row-index').value = item.rowIndex;
+      document.getElementById('sanksi-aturan-nama').value = item.nama;
+      document.getElementById('sanksi-aturan-kelas').value = item.kelas;
+      document.getElementById('sanksi-aturan-ambang').value = item.ambang;
+      document.getElementById('sanksi-aturan-jenis').value = item.jenisSanksi;
+      document.getElementById('sanksi-aturan-nama').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function resetFormAturanSanksi() {
+      document.getElementById('form-sanksi-aturan').reset();
+      document.getElementById('sanksi-aturan-row-index').value = '';
+      document.getElementById('sanksi-aturan-ambang').value = 3;
+    }
+
+    function simpanAturanSanksiAdmin(e) {
+      e.preventDefault();
+      const payload = {
+        rowIndex: document.getElementById('sanksi-aturan-row-index').value,
+        nama: document.getElementById('sanksi-aturan-nama').value.trim(),
+        kelas: document.getElementById('sanksi-aturan-kelas').value.trim(),
+        ambangPelanggaran: parseInt(document.getElementById('sanksi-aturan-ambang').value, 10),
+        jenisSanksi: document.getElementById('sanksi-aturan-jenis').value.trim()
+      };
+
+      google.script.run.withSuccessHandler(function(res) {
+        showToast(res.message, res.success ? 'success' : 'error');
+        if (res.success) {
+          resetFormAturanSanksi();
+          loadAturanSanksiAdmin();
+        }
+      }).withFailureHandler(function(error) {
+        showToast('Gagal menyimpan: ' + (error.message || error), 'error');
+      }).simpanAturanSanksi(sessionToken, payload);
+    }
+
+    function konfirmasiHapusAturanSanksi(rowIndex) {
+      customConfirm('Hapus Aturan Sanksi', 'Yakin ingin menghapus aturan sanksi ini?', function() {
+        google.script.run.withSuccessHandler(function(res) {
+          showToast(res.message, res.success ? 'success' : 'error');
+          if (res.success) loadAturanSanksiAdmin();
+        }).withFailureHandler(function(error) {
+          showToast('Gagal menghapus: ' + (error.message || error), 'error');
+        }).hapusAturanSanksi(sessionToken, rowIndex);
+      });
+    }
+
+    function loadRiwayatSanksiAdmin() {
+      google.script.run.withSuccessHandler(function(data) {
+        daftarRiwayatSanksi = Array.isArray(data) ? data : [];
+        renderRiwayatSanksiTable();
+      }).getRiwayatSanksiList(sessionToken);
+    }
+
+    function renderRiwayatSanksiTable() {
+      const tbody = document.getElementById('sanksi-riwayat-table-body');
+      if (!tbody) return;
+      const isEditor = isEditorRole();
+
+      if (daftarRiwayatSanksi.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="p-3 text-center text-slate-400 italic">Belum ada sanksi yang terpicu.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = daftarRiwayatSanksi.map(function(r) {
+        const statusClass = r.status === 'Selesai' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700';
+        return '<tr>' +
+          '<td class="p-2 whitespace-nowrap">' + (r.tanggal || '-') + '</td>' +
+          '<td class="p-2 font-semibold">' + r.nama + '</td>' +
+          '<td class="p-2">' + (r.kelas || '-') + '</td>' +
+          '<td class="p-2">' + r.jumlah + 'x (ambang ' + r.ambang + 'x)</td>' +
+          '<td class="p-2">' + r.jenisSanksi + '</td>' +
+          '<td class="p-2">' +
+            (isEditor
+              ? '<select onchange="ubahStatusSanksi(' + r.rowIndex + ', this.value)" class="p-1.5 rounded-lg text-[11px] font-bold border ' + statusClass + '">' +
+                  '<option value="Belum Selesai"' + (r.status !== 'Selesai' ? ' selected' : '') + '>Belum Selesai</option>' +
+                  '<option value="Selesai"' + (r.status === 'Selesai' ? ' selected' : '') + '>Selesai</option>' +
+                '</select>'
+              : '<span class="px-2 py-0.5 rounded-md text-[10px] font-bold ' + statusClass + '">' + r.status + '</span>') +
+          '</td>' +
+          '<td class="editor-only ' + (isEditor ? '' : 'hidden') + ' p-2 text-center">' +
+            '<button type="button" onclick="konfirmasiHapusRiwayatSanksi(' + r.rowIndex + ')" class="text-red-600 font-bold text-[11px]">Hapus</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function ubahStatusSanksi(rowIndex, statusBaru) {
+      google.script.run.withSuccessHandler(function(res) {
+        showToast(res.message, res.success ? 'success' : 'error');
+        if (res.success) loadRiwayatSanksiAdmin();
+      }).withFailureHandler(function(error) {
+        showToast('Gagal memperbarui status: ' + (error.message || error), 'error');
+      }).updateStatusSanksi(sessionToken, rowIndex, statusBaru, '');
+    }
+
+    function konfirmasiHapusRiwayatSanksi(rowIndex) {
+      customConfirm('Hapus Riwayat Sanksi', 'Yakin ingin menghapus catatan sanksi ini?', function() {
+        google.script.run.withSuccessHandler(function(res) {
+          showToast(res.message, res.success ? 'success' : 'error');
+          if (res.success) loadRiwayatSanksiAdmin();
+        }).withFailureHandler(function(error) {
+          showToast('Gagal menghapus: ' + (error.message || error), 'error');
+        }).hapusRiwayatSanksi(sessionToken, rowIndex);
+      });
+    }
+
+    // ===================== KELOLA TINGKAT & POIN (Tab Admin Siswa) =====================
+    function loadTingkatPoinAdmin() {
+      google.script.run.withSuccessHandler(function(data) {
+        daftarTingkatPoin = Array.isArray(data) ? data : [];
+        renderTingkatPoinTable();
+        renderOpsiTingkat(); // sinkronkan dropdown Tingkat di form Input Data juga
+      }).getDaftarTingkatPoin();
+    }
+
+    function renderTingkatPoinTable() {
+      const tbody = document.getElementById('tingkat-poin-table-body');
+      if (!tbody) return;
+
+      if (daftarTingkatPoin.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-3 text-center text-slate-400 italic">Belum ada tingkat diatur.</td></tr>';
+        return;
+      }
+
+      const isAdmin = isEditorRole();
+      const kategoriBadge = function(k) {
+        return k === 'Prestasi' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
+      };
+
+      tbody.innerHTML = daftarTingkatPoin.map(function(t) {
+        const aksiHtml = isAdmin
+          ? '<button type="button" onclick="editTingkatPoin(' + t.rowIndex + ')" class="text-blue-600 font-bold text-[11px] mr-2">Edit</button>' +
+            '<button type="button" onclick="konfirmasiHapusTingkatPoin(' + t.rowIndex + ')" class="text-red-600 font-bold text-[11px]">Hapus</button>'
+          : '';
+        return '<tr>' +
+          '<td class="p-2"><span class="px-2 py-1 rounded-md text-[11px] font-bold ' + kategoriBadge(t.kategori) + '">' + t.kategori + '</span></td>' +
+          '<td class="p-2 font-semibold">' + t.tingkat + '</td>' +
+          '<td class="p-2 font-bold">' + t.poin + '</td>' +
+          '<td class="editor-only hidden p-2 text-center">' + aksiHtml + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function editTingkatPoin(rowIndex) {
+      const item = daftarTingkatPoin.find(function(t) { return t.rowIndex === rowIndex; });
+      if (!item) return;
+      document.getElementById('tingkat-poin-row-index').value = item.rowIndex;
+      document.getElementById('tingkat-poin-kategori').value = item.kategori;
+      document.getElementById('tingkat-poin-nama').value = item.tingkat;
+      document.getElementById('tingkat-poin-nilai').value = item.poin;
+      document.getElementById('tingkat-poin-kategori').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function resetFormTingkatPoin() {
+      document.getElementById('form-tingkat-poin').reset();
+      document.getElementById('tingkat-poin-row-index').value = '';
+      document.getElementById('tingkat-poin-nilai').value = 1;
+    }
+
+    function simpanTingkatPoinAdmin(e) {
+      e.preventDefault();
+      const payload = {
+        kategori: document.getElementById('tingkat-poin-kategori').value,
+        tingkat: document.getElementById('tingkat-poin-nama').value.trim(),
+        poin: parseInt(document.getElementById('tingkat-poin-nilai').value, 10)
+      };
+
+      google.script.run.withSuccessHandler(function(res) {
+        showToast(res.message, res.success ? 'success' : 'error');
+        if (res.success) {
+          resetFormTingkatPoin();
+          loadTingkatPoinAdmin();
+        }
+      }).withFailureHandler(function(error) {
+        showToast('Gagal menyimpan: ' + (error.message || error), 'error');
+      }).simpanTingkatPoin(sessionToken, payload);
+    }
+
+    function konfirmasiHapusTingkatPoin(rowIndex) {
+      customConfirm('Hapus Tingkat', 'Yakin ingin menghapus tingkat ini? Laporan lama yang sudah pakai tingkat ini tidak akan berubah.', function() {
+        google.script.run.withSuccessHandler(function(res) {
+          showToast(res.message, res.success ? 'success' : 'error');
+          if (res.success) loadTingkatPoinAdmin();
+        }).withFailureHandler(function(error) {
+          showToast('Gagal menghapus: ' + (error.message || error), 'error');
+        }).hapusTingkatPoin(sessionToken, rowIndex);
+      });
+    }
+
     function simpanAkunAdmin(e) {
       e.preventDefault();
       const data = {
@@ -3564,9 +4425,103 @@
       });
     }
 
-    function displayFileName(input) {
+    // ===================== FOTO BUKTI KEJADIAN (MULTI, MAKS 10) =====================
+    // Menampung foto bukti kejadian yang dipilih pengguna. Disimpan di array
+    // JS terpisah (bukan langsung dari input.files) supaya pengguna bisa
+    // menambah foto lewat beberapa kali klik "Pilih File" (tiap kali dibuka,
+    // input di-reset supaya FileList sebelumnya tidak hilang), sekaligus bisa
+    // menghapus satu-per-satu foto yang salah pilih sebelum disimpan.
+    const MAKS_FOTO_BUKTI = 10;
+    let fotoBuktiFiles = [];
+
+    function handleFotoBuktiChange(input) {
+      const filesBaru = Array.from(input.files || []);
+      input.value = ''; // reset supaya bisa pilih file yang sama lagi / nambah lain kali
+
+      if (filesBaru.length === 0) return;
+
+      let ditolakKarenaPenuh = 0;
+      filesBaru.forEach(function(f) {
+        if (fotoBuktiFiles.length >= MAKS_FOTO_BUKTI) { ditolakKarenaPenuh++; return; }
+        fotoBuktiFiles.push(f);
+      });
+
+      if (ditolakKarenaPenuh > 0) {
+        showToast('Maksimal ' + MAKS_FOTO_BUKTI + ' foto per laporan. ' + ditolakKarenaPenuh + ' foto tambahan tidak ditambahkan.', 'error');
+      }
+
+      renderFotoBuktiPreview();
+    }
+
+    function hapusFotoBuktiItem(idx) {
+      fotoBuktiFiles.splice(idx, 1);
+      renderFotoBuktiPreview();
+    }
+
+    function renderFotoBuktiPreview() {
       const display = document.getElementById('file-name-display');
-      display.textContent = (input.files && input.files[0]) ? '✓ ' + input.files[0].name : '';
+      const preview = document.getElementById('preview-foto-bukti');
+      if (!display || !preview) return;
+
+      display.textContent = fotoBuktiFiles.length
+        ? '✓ ' + fotoBuktiFiles.length + '/' + MAKS_FOTO_BUKTI + ' foto dipilih'
+        : '';
+
+      preview.innerHTML = fotoBuktiFiles.map(function(f, idx) {
+        const namaEsc = escJs(f.name);
+        return '<span class="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-semibold max-w-[180px]">' +
+          '<span class="truncate">' + (f.name.length > 22 ? f.name.slice(0, 19) + '...' : f.name) + '</span>' +
+          '<button type="button" onclick="hapusFotoBuktiItem(' + idx + ')" title="Hapus foto ' + namaEsc + '" class="w-4 h-4 rounded-full bg-blue-200 hover:bg-rose-200 hover:text-rose-700 flex items-center justify-center text-[10px] font-bold flex-shrink-0">✕</button>' +
+        '</span>';
+      }).join('');
+    }
+
+    // ===================== FOTO BUKTI KEJADIAN DI MODAL EDIT (MULTI, MAKS 10) =====================
+    // Sama seperti fotoBuktiFiles di form Input Data, tapi khusus untuk modal
+    // Edit Laporan. Kalau array ini kosong saat disimpan, foto bukti lama
+    // TIDAK diubah; kalau diisi (ada foto baru dipilih), semua foto lama
+    // diganti dengan set foto baru ini (lihat simpanEdit() & editData di server).
+    let editFotoBuktiFiles = [];
+
+    function handleEditFotoBuktiChange(input) {
+      const filesBaru = Array.from(input.files || []);
+      input.value = '';
+
+      if (filesBaru.length === 0) return;
+
+      let ditolakKarenaPenuh = 0;
+      filesBaru.forEach(function(f) {
+        if (editFotoBuktiFiles.length >= MAKS_FOTO_BUKTI) { ditolakKarenaPenuh++; return; }
+        editFotoBuktiFiles.push(f);
+      });
+
+      if (ditolakKarenaPenuh > 0) {
+        showToast('Maksimal ' + MAKS_FOTO_BUKTI + ' foto per laporan. ' + ditolakKarenaPenuh + ' foto tambahan tidak ditambahkan.', 'error');
+      }
+
+      renderEditFotoBuktiPreview();
+    }
+
+    function hapusEditFotoBuktiItem(idx) {
+      editFotoBuktiFiles.splice(idx, 1);
+      renderEditFotoBuktiPreview();
+    }
+
+    function renderEditFotoBuktiPreview() {
+      const preview = document.getElementById('edit-preview-foto-bukti');
+      if (!preview) return;
+
+      preview.innerHTML = editFotoBuktiFiles.map(function(f, idx) {
+        const namaEsc = escJs(f.name);
+        return '<span class="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-semibold max-w-[180px]">' +
+          '<span class="truncate">' + (f.name.length > 22 ? f.name.slice(0, 19) + '...' : f.name) + '</span>' +
+          '<button type="button" onclick="hapusEditFotoBuktiItem(' + idx + ')" title="Hapus foto ' + namaEsc + '" class="w-4 h-4 rounded-full bg-blue-200 hover:bg-rose-200 hover:text-rose-700 flex items-center justify-center text-[10px] font-bold flex-shrink-0">✕</button>' +
+        '</span>';
+      }).join('');
+
+      if (editFotoBuktiFiles.length > 0) {
+        document.getElementById('edit-foto-status').textContent = '✓ ' + editFotoBuktiFiles.length + ' foto baru dipilih (akan mengganti semua foto lama).';
+      }
     }
 
     function toggleFotoSurat() {
